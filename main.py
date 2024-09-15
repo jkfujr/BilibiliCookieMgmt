@@ -307,8 +307,7 @@ async def periodic_cookie_refresh():
                 await refresh_expired_cookies()
             except Exception as e:
                 log_print(f"[刷新] 自动刷新过程中出现错误: {e}", "ERROR:     ", "ERROR")
-            # 每天检查一次，可以根据需要调整时间间隔
-            await asyncio.sleep(24 * 60 * 60)  # 24小时
+            await asyncio.sleep(24 * 60 * 60)
     except asyncio.CancelledError:
         logger.debug("[刷新] 自动 Cookie 刷新已取消。")
         raise
