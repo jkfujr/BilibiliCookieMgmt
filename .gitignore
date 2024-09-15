@@ -1,4 +1,5 @@
+* copy.*
+
 /1.ini
 /logs
-/main copy.py
 /__pycache__
