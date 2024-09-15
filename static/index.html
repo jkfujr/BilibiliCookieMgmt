@@ -57,9 +57,9 @@
         top: 50%;
         left: 50%;
         transform: translate(-50%, -50%);
-        width: 360px; /* 增加宽度 */
-        height: 400px; /* 设置固定高度 */
-        padding: 0; /* 去除内边距 */
+        width: 360px;
+        height: 400px;
+        padding: 0;
         background: white;
         border: 2px solid #ccc;
         box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
@@ -72,11 +72,11 @@
         border-bottom: 1px solid #ddd;
       }
       #popupContent {
-        margin-top: 0; /* 去除顶部外边距 */
+        margin-top: 0;
         display: flex;
         justify-content: center;
         align-items: center;
-        height: calc(100% - 30px); /* 减去标题栏高度 */
+        height: calc(100% - 30px);
         overflow: hidden;
       }
 
@@ -92,12 +92,10 @@
     </style>
   </head>
   <body>
-    <!-- 顶部导航栏 -->
     <div id="header">
       <button id="loginButton">登录</button>
     </div>
     <div id="container">
-      <!-- 账号状态表格 -->
       <table id="accountTable">
         <thead>
           <tr>
@@ -110,14 +108,11 @@
           </tr>
         </thead>
         <tbody id="accountStatus">
-          <!-- 数据将通过JavaScript动态填充 -->
         </tbody>
       </table>
-      <!-- 开始扫码按钮 -->
       <button id="startButton">开始扫码</button>
     </div>
 
-    <!-- 弹窗 -->
     <div id="popup">
       <div id="popupHeader">
         <span>二维码扫码</span>
@@ -128,10 +123,8 @@
       </div>
     </div>
 
-    <!-- 引入本地静态文件 -->
     <script src="/static/js/axios.min.js"></script>
     <script src="/static/js/qrcode.min.js"></script>
-    <!-- 前端脚本 -->
     <script>
       document.addEventListener("DOMContentLoaded", () => {
         const loginButton = document.getElementById("loginButton");
@@ -155,18 +148,17 @@
         }
 
 
-        // 点击登录按钮事件
+        // 登录按钮
         loginButton.addEventListener("click", () => {
           const token = prompt("请输入 API Token:");
           if (token) {
-            // 保存 token 到本地存储
             localStorage.setItem("api_token", token);
             alert("Token 已保存！");
             checkLogin();
           }
         });
 
-        // 加载所有账号状态并显示在表格中
+        // 加载显示账号
         async function loadAccountStatus() {
           try {
             const response = await axios.get("/api/cookie");
@@ -202,7 +194,6 @@
               })
               .join("");
 
-            // 为刷新按钮添加事件监听器
             const refreshButtons = document.querySelectorAll(".refreshButton");
             refreshButtons.forEach((button) => {
               button.addEventListener("click", () => {
@@ -211,7 +202,6 @@
               });
             });
 
-            // 为 Cookie 检查按钮添加事件监听器
             const checkButtons = document.querySelectorAll(".checkButton");
             checkButtons.forEach((button) => {
               button.addEventListener("click", () => {
@@ -224,7 +214,7 @@
           }
         }
 
-        // 将时间戳转换为 年-月-日 时:分:秒 格式
+        // 时间戳转格式
         function formatTimestamp(timestamp) {
           const date = new Date(parseInt(timestamp));
           return `${date.getFullYear()}-${padZero(
@@ -239,7 +229,6 @@
           return num < 10 ? "0" + num : num;
         }
 
-        // 获取登录二维码的 auth_code 和 URL
         async function getLoginAuthCodeAndUrl() {
             const token = localStorage.getItem('api_token');
             if (!token) {
@@ -281,18 +270,17 @@
                 });
                 const data = response.data;
 
-                if (data.code === 0) { // 登录成功
+                if (data.code === 0) {
                     alert("扫码成功，Cookie已获取！");
-                    clearInterval(pollingInterval); // 停止轮询
-                    qrcodeElement.innerHTML = ''; // 清除二维码
-                    popup.style.display = 'none'; // 隐藏弹窗
-                    loadAccountStatus(); // 重新加载账号状态
-                } else if (data.code === 86038) { // 二维码已失效
-                    clearInterval(pollingInterval); // 停止轮询
+                    clearInterval(pollingInterval);
+                    qrcodeElement.innerHTML = '';
+                    popup.style.display = 'none';
+                    loadAccountStatus();
+                } else if (data.code === 86038) {
+                    clearInterval(pollingInterval);
                     qrcodeElement.innerHTML = '二维码已失效，请重新扫码。';
-                    qrcodeElement.style.filter = 'grayscale(100%)'; // 将二维码变灰
+                    qrcodeElement.style.filter = 'grayscale(100%)';
                 } else if (data.code === 86090) {
-                    // 等待扫码，继续轮询
                 } else {
                     console.error("未知错误:", data.message);
                 }
@@ -310,7 +298,7 @@
         }
 
 
-        // 点击“开始扫码”按钮事件
+        // 扫码按钮
         startButton.addEventListener('click', async () => {
             const token = localStorage.getItem('api_token');
             if (!token) {
@@ -320,25 +308,21 @@
             try {
                 const { auth_code, url } = await getLoginAuthCodeAndUrl();
                 qrcodeElement.innerHTML = '';
-                qrcodeElement.style.filter = ''; // 重置二维码滤镜
-                new QRCode(qrcodeElement, url); // 生成二维码
-                popup.style.display = 'block'; // 显示弹窗
+                qrcodeElement.style.filter = '';
+                new QRCode(qrcodeElement, url);
+                popup.style.display = 'block';
                 pollingInterval = setInterval(() => verifyLogin(auth_code), 3000); // 开始轮询
             } catch (error) {
                 qrcodeElement.textContent = '获取二维码失败，请刷新页面重试。';
             }
         });
 
-
-        // 关闭弹窗事件
         closePopup.addEventListener("click", () => {
           popup.style.display = "none";
           clearInterval(pollingInterval);
         });
 
-        // 实现弹窗可拖动
         popup.addEventListener("mousedown", (e) => {
-          // 检查是否点击在关闭按钮上，避免与点击关闭按钮事件冲突
           if (e.target.id === "closePopup") return;
           let offsetX = e.clientX - popup.offsetLeft;
           let offsetY = e.clientY - popup.offsetTop;
@@ -354,7 +338,7 @@
           document.addEventListener("mouseup", reset);
         });
 
-        // 刷新指定用户的 Cookie
+        // 刷新Cookie
         async function refreshCookie(DedeUserID) {
           try {
             const confirmRefresh = confirm(
@@ -386,7 +370,7 @@
           }
         }
 
-        // 检查指定用户的 Cookie 是否有效
+        // 检查 Cookie 是否有效
         async function checkCookie(DedeUserID) {
           try {
             const confirmCheck = confirm(
