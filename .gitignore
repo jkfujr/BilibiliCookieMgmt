@@ -1,5 +1,7 @@
 * copy.*
+index copy.html
 
 /1.ini
 /logs
+/data
 /__pycache__
