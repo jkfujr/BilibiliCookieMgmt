@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>比例比例COOKIE管理</title>
+    <style>
+      body {
+        margin: 0;
+        font-family: Arial, sans-serif;
+      }
+      #header {
+        width: 100%;
+        height: 50px;
+        position: relative;
+        background-color: #f0f0f0;
+        border-bottom: 1px solid #ddd;
+      }
+      #loginButton {
+        position: absolute;
+        right: 20px;
+        top: 10px;
+        padding: 5px 10px;
+        cursor: pointer;
+      }
+      #container {
+        width: 80%;
+        max-width: 800px;
+        margin: 20px auto;
+        text-align: center;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-bottom: 20px;
+        table-layout: fixed;
+        word-wrap: break-word;
+      }
+      table,
+      th,
+      td {
+        border: 1px solid black;
+      }
+      th,
+      td {
+        padding: 8px;
+        text-align: center;
+      }
+      #startButton {
+        padding: 10px 20px;
+        font-size: 16px;
+        cursor: pointer;
+      }
+      #popup {
+        display: none;
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        width: 360px; /* 增加宽度 */
+        height: 400px; /* 设置固定高度 */
+        padding: 0; /* 去除内边距 */
+        background: white;
+        border: 2px solid #ccc;
+        box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+        z-index: 1000;
+      }
+      #popupHeader {
+        cursor: move;
+        padding: 5px;
+        background: #f0f0f0;
+        border-bottom: 1px solid #ddd;
+      }
+      #popupContent {
+        margin-top: 0; /* 去除顶部外边距 */
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        height: calc(100% - 30px); /* 减去标题栏高度 */
+        overflow: hidden;
+      }
+
+      #qrcode {
+        max-width: 100%;
+        max-height: 100%;
+      }
+
+      #closePopup {
+        float: right;
+        cursor: pointer;
+      }
+    </style>
+  </head>
+  <body>
+    <!-- 顶部导航栏 -->
+    <div id="header">
+      <button id="loginButton">登录</button>
+    </div>
+    <div id="container">
+      <!-- 账号状态表格 -->
+      <table id="accountTable">
+        <thead>
+          <tr>
+            <th>用户ID</th>
+            <th>更新时间</th>
+            <th>过期时间</th>
+            <th>Cookie状态</th>
+            <th>检查时间</th>
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody id="accountStatus">
+          <!-- 数据将通过JavaScript动态填充 -->
+        </tbody>
+      </table>
+      <!-- 开始扫码按钮 -->
+      <button id="startButton">开始扫码</button>
+    </div>
+
+    <!-- 弹窗 -->
+    <div id="popup">
+      <div id="popupHeader">
+        <span>二维码扫码</span>
+        <span id="closePopup">X</span>
+      </div>
+      <div id="popupContent">
+        <div id="qrcode">二维码加载中...</div>
+      </div>
+    </div>
+
+    <!-- 引入本地静态文件 -->
+    <script src="/static/js/axios.min.js"></script>
+    <script src="/static/js/qrcode.min.js"></script>
+    <!-- 前端脚本 -->
+    <script>
+      document.addEventListener("DOMContentLoaded", () => {
+        const loginButton = document.getElementById("loginButton");
+        const qrcodeElement = document.getElementById("qrcode");
+        const startButton = document.getElementById("startButton");
+        const popup = document.getElementById("popup");
+        const closePopup = document.getElementById("closePopup");
+        const accountStatus = document.getElementById("accountStatus");
+        let pollingInterval;
+
+        // 检查是否已登录
+        function checkLogin() {
+            const token = localStorage.getItem('api_token');
+            if (token) {
+                loginButton.textContent = '已登录';
+                loginButton.disabled = true;
+            } else {
+                loginButton.textContent = '登录';
+                loginButton.disabled = false;
+            }
+        }
+
+
+        // 点击登录按钮事件
+        loginButton.addEventListener("click", () => {
+          const token = prompt("请输入 API Token:");
+          if (token) {
+            // 保存 token 到本地存储
+            localStorage.setItem("api_token", token);
+            alert("Token 已保存！");
+            checkLogin();
+          }
+        });
+
+        // 加载所有账号状态并显示在表格中
+        async function loadAccountStatus() {
+          try {
+            const response = await axios.get("/api/cookie");
+            const data = response.data;
+            accountStatus.innerHTML = data
+              .map((item) => {
+                const checkTime = item.check_time
+                  ? formatTimestamp(item.check_time)
+                  : "未检查";
+                const cookieStatus =
+                  item.cookie_valid === true
+                    ? "有效"
+                    : item.cookie_valid === false
+                    ? "无效"
+                    : "未知";
+                return `
+                            <tr>
+                                <td>${item.DedeUserID}</td>
+                                <td>${formatTimestamp(item.update_time)}</td>
+                                <td>${formatTimestamp(item.expire_time)}</td>
+                                <td>${cookieStatus}</td>
+                                <td>${checkTime}</td>
+                                <td>
+                                    <button class="refreshButton" data-dedeuserid="${
+                                      item.DedeUserID
+                                    }">Cookie 刷新</button>
+                                    <button class="checkButton" data-dedeuserid="${
+                                      item.DedeUserID
+                                    }">Cookie 检查</button>
+                                </td>
+                            </tr>
+                        `;
+              })
+              .join("");
+
+            // 为刷新按钮添加事件监听器
+            const refreshButtons = document.querySelectorAll(".refreshButton");
+            refreshButtons.forEach((button) => {
+              button.addEventListener("click", () => {
+                const DedeUserID = button.getAttribute("data-dedeuserid");
+                refreshCookie(DedeUserID);
+              });
+            });
+
+            // 为 Cookie 检查按钮添加事件监听器
+            const checkButtons = document.querySelectorAll(".checkButton");
+            checkButtons.forEach((button) => {
+              button.addEventListener("click", () => {
+                const DedeUserID = button.getAttribute("data-dedeuserid");
+                checkCookie(DedeUserID);
+              });
+            });
+          } catch (error) {
+            console.error("加载账号状态失败:", error);
+          }
+        }
+
+        // 将时间戳转换为 年-月-日 时:分:秒 格式
+        function formatTimestamp(timestamp) {
+          const date = new Date(parseInt(timestamp));
+          return `${date.getFullYear()}-${padZero(
+            date.getMonth() + 1
+          )}-${padZero(date.getDate())} ${padZero(date.getHours())}:${padZero(
+            date.getMinutes()
+          )}:${padZero(date.getSeconds())}`;
+        }
+
+        // 数字补零
+        function padZero(num) {
+          return num < 10 ? "0" + num : num;
+        }
+
+        // 获取登录二维码的 auth_code 和 URL
+        async function getLoginAuthCodeAndUrl() {
+            const token = localStorage.getItem('api_token');
+            if (!token) {
+                alert('请先登录以提供 API Token。');
+                throw new Error('未登录');
+            }
+            try {
+                const response = await axios.get('/api/passport-login/web/qrcode/generate', {
+                    headers: { token: token }
+                });
+                const data = response.data;
+                return {
+                    auth_code: data.data.auth_code,
+                    url: data.data.url
+                };
+            } catch (error) {
+                if (error.response && error.response.status === 401) {
+                    alert('Token 无效或已过期，请重新登录。');
+                    localStorage.removeItem('api_token');
+                    checkLogin();
+                }
+                throw error;
+            }
+        }
+
+        // 轮询检查登录状态
+        async function verifyLogin(auth_code) {
+            const token = localStorage.getItem('api_token');
+            if (!token) {
+                alert('请先登录以提供 API Token。');
+                clearInterval(pollingInterval);
+                popup.style.display = 'none';
+                throw new Error('未登录');
+            }
+            try {
+                const response = await axios.get('/api/passport-login/web/qrcode/poll', {
+                    params: { auth_code: auth_code },
+                    headers: { token: token }
+                });
+                const data = response.data;
+
+                if (data.code === 0) { // 登录成功
+                    alert("扫码成功，Cookie已获取！");
+                    clearInterval(pollingInterval); // 停止轮询
+                    qrcodeElement.innerHTML = ''; // 清除二维码
+                    popup.style.display = 'none'; // 隐藏弹窗
+                    loadAccountStatus(); // 重新加载账号状态
+                } else if (data.code === 86038) { // 二维码已失效
+                    clearInterval(pollingInterval); // 停止轮询
+                    qrcodeElement.innerHTML = '二维码已失效，请重新扫码。';
+                    qrcodeElement.style.filter = 'grayscale(100%)'; // 将二维码变灰
+                } else if (data.code === 86090) {
+                    // 等待扫码，继续轮询
+                } else {
+                    console.error("未知错误:", data.message);
+                }
+            } catch (error) {
+                if (error.response && error.response.status === 401) {
+                    alert('Token 无效或已过期，请重新登录。');
+                    localStorage.removeItem('api_token');
+                    checkLogin();
+                    clearInterval(pollingInterval);
+                    popup.style.display = 'none';
+                } else {
+                    console.error("轮询失败:", error);
+                }
+            }
+        }
+
+
+        // 点击“开始扫码”按钮事件
+        startButton.addEventListener('click', async () => {
+            const token = localStorage.getItem('api_token');
+            if (!token) {
+                alert('请先登录以提供 API Token。');
+                return;
+            }
+            try {
+                const { auth_code, url } = await getLoginAuthCodeAndUrl();
+                qrcodeElement.innerHTML = '';
+                qrcodeElement.style.filter = ''; // 重置二维码滤镜
+                new QRCode(qrcodeElement, url); // 生成二维码
+                popup.style.display = 'block'; // 显示弹窗
+                pollingInterval = setInterval(() => verifyLogin(auth_code), 3000); // 开始轮询
+            } catch (error) {
+                qrcodeElement.textContent = '获取二维码失败，请刷新页面重试。';
+            }
+        });
+
+
+        // 关闭弹窗事件
+        closePopup.addEventListener("click", () => {
+          popup.style.display = "none";
+          clearInterval(pollingInterval);
+        });
+
+        // 实现弹窗可拖动
+        popup.addEventListener("mousedown", (e) => {
+          // 检查是否点击在关闭按钮上，避免与点击关闭按钮事件冲突
+          if (e.target.id === "closePopup") return;
+          let offsetX = e.clientX - popup.offsetLeft;
+          let offsetY = e.clientY - popup.offsetTop;
+          function mouseMoveHandler(e) {
+            popup.style.left = `${e.clientX - offsetX}px`;
+            popup.style.top = `${e.clientY - offsetY}px`;
+          }
+          function reset() {
+            document.removeEventListener("mousemove", mouseMoveHandler);
+            document.removeEventListener("mouseup", reset);
+          }
+          document.addEventListener("mousemove", mouseMoveHandler);
+          document.addEventListener("mouseup", reset);
+        });
+
+        // 刷新指定用户的 Cookie
+        async function refreshCookie(DedeUserID) {
+          try {
+            const confirmRefresh = confirm(
+              `确定要刷新用户 ${DedeUserID} 的 Cookie 吗？`
+            );
+            if (!confirmRefresh) return;
+
+            const token = localStorage.getItem("api_token");
+            if (!token) {
+              alert("请先登录以提供 API Token。");
+              return;
+            }
+
+            const response = await axios.get(`/api/cookie/refresh`, {
+              params: { DedeUserID: DedeUserID },
+              headers: { token: token },
+            });
+            const data = response.data;
+            if (data.code === 0) {
+              const expireTime = formatTimestamp(data.expire_time);
+              alert(`刷新成功！\n有效期至：${expireTime}`);
+              loadAccountStatus();
+            } else {
+              alert(`刷新失败：${data.message}`);
+            }
+          } catch (error) {
+            console.error("刷新失败:", error);
+            alert("刷新失败，网络错误或服务器异常。");
+          }
+        }
+
+        // 检查指定用户的 Cookie 是否有效
+        async function checkCookie(DedeUserID) {
+          try {
+            const confirmCheck = confirm(
+              `确定要检查用户 ${DedeUserID} 的 Cookie 状态吗？`
+            );
+            if (!confirmCheck) return;
+
+            const token = localStorage.getItem("api_token");
+            if (!token) {
+              alert("请先登录以提供 API Token。");
+              return;
+            }
+
+            const response = await axios.get(`/api/cookie/check`, {
+              params: { DedeUserID: DedeUserID },
+              headers: { token: token },
+            });
+            const data = response.data;
+            if (data.code === 0) {
+              alert(`Cookie 有效！`);
+            } else {
+              alert(`Cookie 无效：${data.message}`);
+            }
+            loadAccountStatus();
+          } catch (error) {
+            console.error("检查失败:", error);
+            alert("检查失败，网络错误或服务器异常。");
+          }
+        }
+
+        checkLogin();
+        loadAccountStatus();
+      });
+    </script>
+  </body>
+</html>
