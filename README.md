@@ -4,11 +4,14 @@
 
 一个 python 实现的 BILIBILI COOKIE管理器
 
-功能
-- web状态显示
-- COOKIK 自动刷新
-- COOKIK 自动检查
-
+## 功能
+- WEB状态
+- 消息推送
+    - Gotify
+- COOKIK
+    - 定时健康检查
+    - 定时刷新 (到期一个月前)
+    - API
 
 # 使用说明
 
@@ -17,3 +20,12 @@
 ```
 (待补充)
 ```
+
+# TODO
+- WEB状态总览
+    - (暂无)
+- 消息推送
+    - WEBHOOK
+    - EMAIL
+- COOKIK管理
+    - (暂无)
