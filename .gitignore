@@ -1,5 +1,6 @@
 * copy.*
-/1.ini
-/logs
-/data
-/__pycache__
+*.ini
+config.yaml
+logs
+data
+__pycache__

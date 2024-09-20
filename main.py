@@ -1,70 +1,14 @@
-import os, time, json, yaml, hashlib, asyncio, aiohttp, uvicorn, urllib.parse, logging
+import os, time, json, yaml, hashlib, asyncio, aiohttp, uvicorn, urllib.parse
 
 from contextlib import asynccontextmanager
-
 from fastapi import FastAPI, HTTPException, Query, Header
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from logging.handlers import TimedRotatingFileHandler
-
-# 配置文件路径
-config_file_path = os.path.join(os.path.dirname(__file__), "config.yaml")
-with open(config_file_path, "r", encoding="utf-8") as f:
-    config = yaml.safe_load(f)
-
-
-### 日志模块
-def log():
-    global logger
-    if logging.getLogger().handlers:
-        return logging.getLogger()
-
-    script_directory = os.path.dirname(os.path.abspath(__file__))
-    log_directory = os.path.join(script_directory, "logs")
-    if not os.path.exists(log_directory):
-        os.makedirs(log_directory)
-
-    # 日志格式
-    log_formatter = logging.Formatter(
-        "%(asctime)s [%(levelname)s] %(processName)s - %(message)s"
-    )
-
-    default_log_file_name = "ck"
-    log_file_path = os.path.join(log_directory, default_log_file_name)
-    log_file_handler = TimedRotatingFileHandler(
-        log_file_path,
-        when="midnight",
-        interval=1,
-        backupCount=30,
-        encoding="utf-8",
-    )
-    log_file_handler.suffix = "%Y-%m-%d.log"
-    log_file_handler.setFormatter(log_formatter)
-    logger = logging.getLogger()
-    logger.setLevel(logging.DEBUG)
-    logger.addHandler(log_file_handler)
-
-    return logger
-
+from core.gotify import push_gotify
+from core.logs import log, log_print
 
 logger = log()
-
-
-### 合并日志与打印信息，用于在控制台也能输出日志信息
-def log_print(message, prefix="", level="INFO"):
-    """
-    用法
-    log_print("信息", "等级:     ", "等级")
-    """
-    if isinstance(level, str):
-        level = getattr(logging, level.upper(), logging.INFO)
-    # 日志
-    logger = logging.getLogger()
-    logger.log(level, message)
-    # 打印
-    print(prefix + message)
-
 
 # 一些常量
 APP_KEY = "4409e2ce8ffd12b8"
@@ -74,16 +18,55 @@ USER_AGENT = (
     "(KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36 Edg/128.0.0.0"
 )
 
-# cookie目录
+# DQ配置文件
+config_file_path = os.path.join(os.path.dirname(__file__), "config.yaml")
+with open(config_file_path, "r", encoding="utf-8") as f:
+    config = yaml.safe_load(f)
+
+
+# Cookie 目录
 COOKIE_FOLDER = os.path.join("data", "cookie")
 
-# cookie检查
+# Cookie 检查
 COOKIE_CHECK_ENABLE = config["COOKIE_CHECK"]["enable"]
 COOKIE_CHECK_INTERVAL = config["COOKIE_CHECK"]["check_intlval"]
 
-# cookie刷新
+# Cookie 刷新
 COOKIE_REFRESH_ENABLE = config["COOKIE_REFRESH"]["enable"]
 COOKIE_REFRESH_INTERVAL = config["COOKIE_REFRESH"]["refresh_intlval"]
+
+# 推送配置
+PUSH_CONFIG = config.get("PUSH", {})
+## Gotify
+GOTIFY_CONFIG = PUSH_CONFIG.get("GOTIFY", {})
+GOTIFY_ENABLE = GOTIFY_CONFIG.get("enable", False)
+GOTIFY_URL = GOTIFY_CONFIG.get("url", "")
+GOTIFY_TOKEN = GOTIFY_CONFIG.get("token", "")
+
+
+async def notify_gotify(title: str, message: str, priority: int = 1):
+    """
+    发送 Gotify 通知。
+
+    参数:
+    - title (str): 消息标题。
+    - message (str): 消息内容。
+    - priority (int): 消息优先级，默认为1。
+    """
+    if GOTIFY_ENABLE and GOTIFY_URL and GOTIFY_TOKEN:
+        try:
+            await push_gotify(
+                GOTIFY_URL,
+                GOTIFY_TOKEN,
+                title,
+                message,
+                priority=priority,
+            )
+            logger.info(f"[Gotify] 通知已发送: {title}")
+        except Exception as e:
+            log_print(f"[Gotify] 推送通知失败: {e}", "ERROR")
+    else:
+        logger.debug("[Gotify] Gotify 未启用或配置不完整，跳过通知。")
 
 
 # 为请求参数进行 API 签名
@@ -96,12 +79,12 @@ def tvsign(params, appkey=APP_KEY, appsec=APP_SEC):
     return params
 
 
-# 获取指定用户的 Cookie 文件路径
+# Cookie文件路径
 def get_cookie_file_path(DedeUserID):
     return os.path.join(COOKIE_FOLDER, f"{DedeUserID}.json")
 
 
-# 读取指定用户的 Cookie 信息
+# 读取Cookie
 def read_cookie(DedeUserID):
     file_path = get_cookie_file_path(DedeUserID)
     if os.path.exists(file_path):
@@ -111,7 +94,7 @@ def read_cookie(DedeUserID):
         return None
 
 
-# 保存登录成功后的 Cookie 信息
+# 保存Cookie
 def save_cookie_info(login_data):
     DedeUserID = ""
     for cookie in login_data["cookie_info"]["cookies"]:
@@ -135,7 +118,7 @@ def save_cookie_info(login_data):
         json.dump(save_info, f, ensure_ascii=False, indent=4)
 
 
-# 刷新指定用户的 Cookie 信息
+# 刷新Cookie
 async def refresh_cookie(DedeUserID):
     cookie_data = read_cookie(DedeUserID)
     if not cookie_data:
@@ -166,7 +149,7 @@ async def refresh_cookie(DedeUserID):
             ) as rsp:
                 rsp_data = await rsp.json()
     except Exception as e:
-        logger.error("[刷新] 解析失败:", e)
+        log_print(f"[刷新] 解析失败: {e}", "ERROR")
         return {"code": -1, "message": "请求或解析失败"}
 
     if rsp_data["code"] == 0:
@@ -182,20 +165,34 @@ async def refresh_cookie(DedeUserID):
         with open(file_path, "w", encoding="utf-8") as f:
             json.dump(save_info, f, ensure_ascii=False, indent=4)
 
+        expire_time_str = time.strftime(
+            "%Y-%m-%d %H:%M:%S", time.localtime(expire_timestamp / 1000)
+        )
+
+        log_print(
+            f"[刷新] 用户 {DedeUserID} 的 Cookie 刷新成功，有效期至 {expire_time_str}",
+            "INFO",
+        )
+        await notify_gotify(
+            "[BiliBiliCookieMgmt] Cookie 刷新通知",
+            f"用户 {DedeUserID} 的 Cookie 刷新成功，有效期至 {expire_time_str}",
+            priority=5,
+        )
+
         return {
             "code": 0,
             "message": "刷新成功",
             "expire_time": expire_timestamp,
         }
     else:
-        logger.error("[刷新] 刷新失败:", rsp_data.get("message", "未知错误"))
+        log_print(f"[刷新] 刷新失败: {rsp_data.get('message', '未知错误')}", "ERROR")
         return {
             "code": rsp_data["code"],
             "message": rsp_data.get("message", "刷新失败"),
         }
 
 
-# 检查指定用户的 Cookie 是否有效
+# Cookie健康检查
 async def check_cookie(DedeUserID):
     cookie_data = read_cookie(DedeUserID)
     if not cookie_data:
@@ -224,8 +221,11 @@ async def check_cookie(DedeUserID):
             logger.debug(f"[检查] 用户 {DedeUserID} 的 Cookie 有效")
         else:
             cookie_data["cookie_valid"] = False
-            log_print(
-                f"[检查] 用户 {DedeUserID} 的 Cookie 无效", "ERROR:     ", "ERROR"
+            log_print(f"[检查] 用户 {DedeUserID} 的 Cookie 无效", "ERROR")
+            await notify_gotify(
+                "[BiliBiliCookieMgmt] Cookie 失效通知",
+                f"用户 {DedeUserID} 的 Cookie 已失效，请尽快处理。",
+                priority=5,
             )
 
         file_path = get_cookie_file_path(DedeUserID)
@@ -237,11 +237,11 @@ async def check_cookie(DedeUserID):
         else:
             return {"code": -2, "message": "Cookie 无效"}
     except Exception as e:
-        logger.error(f"[检查] 检查用户 {DedeUserID} 失败: {e}")
+        log_print(f"[检查] 检查用户 {DedeUserID} 失败: {e}", "ERROR")
         return {"code": -1, "message": "检查失败"}
 
 
-# 检查所有用户的 Cookie 有效性
+# Cookie健康检查-所有Cookie
 async def check_all_cookies():
     if not os.path.exists(COOKIE_FOLDER):
         logger.debug("[检查] Cookie 文件夹不存在，无需检查。")
@@ -256,7 +256,7 @@ async def check_all_cookies():
     await asyncio.gather(*tasks)
 
 
-# 检查并刷新需要更新的 Cookie
+# Cookie到期检查-每天检查定时刷新
 async def refresh_expired_cookies():
     if not os.path.exists(COOKIE_FOLDER):
         logger.debug("[刷新] Cookie 文件夹不存在，无需刷新。")
@@ -271,8 +271,9 @@ async def refresh_expired_cookies():
                 current_time = int(time.time() * 1000)
                 elapsed_days = (current_time - update_time) / (1000 * 60 * 60 * 24)
                 if elapsed_days >= COOKIE_REFRESH_INTERVAL:
-                    logger.info(
-                        f"[刷新] 用户 {DedeUserID} 的 Cookie 超过了刷新间隔，正在刷新..."
+                    log_print(
+                        f"[刷新] 用户 {DedeUserID} 的 Cookie 超过了刷新间隔，正在刷新...",
+                        "INFO",
                     )
                     task = asyncio.create_task(refresh_cookie(DedeUserID))
                     tasks.append(task)
@@ -290,7 +291,7 @@ async def periodic_cookie_check():
             try:
                 await check_all_cookies()
             except Exception as e:
-                log_print(f"[检查] 自动检查过程中出现错误: {e}", "ERROR:     ", "ERROR")
+                log_print(f"[检查] 自动检查过程中出现错误: {e}", "ERROR")
             logger.debug(f"[检查] 下一次检查将在 {COOKIE_CHECK_INTERVAL} 秒后进行。")
             await asyncio.sleep(COOKIE_CHECK_INTERVAL)
     except asyncio.CancelledError:
@@ -306,16 +307,16 @@ async def periodic_cookie_refresh():
             try:
                 await refresh_expired_cookies()
             except Exception as e:
-                log_print(f"[刷新] 自动刷新过程中出现错误: {e}", "ERROR:     ", "ERROR")
+                log_print(f"[刷新] 自动刷新过程中出现错误: {e}", "ERROR")
             await asyncio.sleep(24 * 60 * 60)
     except asyncio.CancelledError:
         logger.debug("[刷新] 自动 Cookie 刷新已取消。")
         raise
 
 
-# 定义应用的生命周期管理
+# 启动函数
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def run(app: FastAPI):
     tasks = []
     if COOKIE_CHECK_ENABLE:
         logger.debug(
@@ -346,7 +347,7 @@ async def lifespan(app: FastAPI):
 
 
 # FastAPI
-app = FastAPI(lifespan=lifespan)
+app = FastAPI(run=run)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
@@ -410,7 +411,7 @@ async def poll_qr(auth_code: str, token: str = Header(None)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# 获取所有 Cookie 的简要信息或指定 DedeUserID 的详细信息
+# 获取Cookie信息
 @app.get("/api/cookie")
 async def get_cookies(DedeUserID: str = Query(None), token: str = Header(None)):
     if DedeUserID:
@@ -455,7 +456,7 @@ async def get_cookies(DedeUserID: str = Query(None), token: str = Header(None)):
         return JSONResponse(content=cookies)
 
 
-# 检查指定用户的 Cookie 是否有效
+# Cookie健康检查
 @app.get("/api/cookie/check")
 async def check_cookie_api(DedeUserID: str = Query(...), token: str = Header(None)):
     await verify_api_token(token)
@@ -474,7 +475,7 @@ async def check_cookie_api(DedeUserID: str = Query(...), token: str = Header(Non
         )
 
 
-# 刷新指定用户的 Cookie 接口
+# Cookie刷新
 @app.get("/api/cookie/refresh")
 async def refresh_cookie_api(DedeUserID: str = Query(...), token: str = Header(None)):
     await verify_api_token(token)

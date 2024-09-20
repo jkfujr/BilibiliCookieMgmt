@@ -311,7 +311,7 @@
                 qrcodeElement.style.filter = '';
                 new QRCode(qrcodeElement, url);
                 popup.style.display = 'block';
-                pollingInterval = setInterval(() => verifyLogin(auth_code), 3000); // 开始轮询
+                pollingInterval = setInterval(() => verifyLogin(auth_code), 3000);
             } catch (error) {
                 qrcodeElement.textContent = '获取二维码失败，请刷新页面重试。';
             }

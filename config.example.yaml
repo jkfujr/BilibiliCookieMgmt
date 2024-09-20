@@ -25,9 +25,12 @@ COOKIE_REFRESH:
   refresh_intlval: 30
 
 PUSH:
-  GOTYFI:
+  GOTIFY:
     # 是否启用
+    ## 默认false
     enable: true
+    url: "http://114.51.41.91:9810"
+    token: "0721000000"
   EMAIL:
     # 是否启用
     enable: true
