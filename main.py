@@ -44,7 +44,7 @@ GOTIFY_URL = GOTIFY_CONFIG.get("url", "")
 GOTIFY_TOKEN = GOTIFY_CONFIG.get("token", "")
 
 
-async def notify_gotify(title: str, message: str, priority: int = 1):
+async def push_gotify(title: str, message: str, priority: int = 1):
     """
     发送 Gotify 通知。
 
@@ -149,7 +149,7 @@ async def refresh_cookie(DedeUserID):
             ) as rsp:
                 rsp_data = await rsp.json()
     except Exception as e:
-        log_print(f"[刷新] 解析失败: {e}", "ERROR")
+        logger.error(f"[刷新] 解析失败: {e}")
         return {"code": -1, "message": "请求或解析失败"}
 
     if rsp_data["code"] == 0:
@@ -169,15 +169,26 @@ async def refresh_cookie(DedeUserID):
             "%Y-%m-%d %H:%M:%S", time.localtime(expire_timestamp / 1000)
         )
 
-        log_print(
-            f"[刷新] 用户 {DedeUserID} 的 Cookie 刷新成功，有效期至 {expire_time_str}",
-            "INFO",
+        logger.info(
+            f"[刷新] 用户 {DedeUserID} 的 Cookie 刷新成功，有效期至 {expire_time_str}"
         )
-        await notify_gotify(
+        await push_gotify(
             "[BiliBiliCookieMgmt] Cookie 刷新通知",
             f"用户 {DedeUserID} 的 Cookie 刷新成功，有效期至 {expire_time_str}",
             priority=5,
         )
+
+        # 健康检查
+        check_result = await check_cookie(DedeUserID)
+        if check_result["code"] == 0:
+            logger.info(f"[刷新] 用户 {DedeUserID} 的 Cookie 有效")
+        else:
+            log_print(f"[检查] 用户 {DedeUserID} 的 Cookie 无效", "WARN")
+            await push_gotify(
+                "[BiliBiliCookieMgmt] Cookie 失效通知",
+                f"用户 {DedeUserID} 的 Cookie 已失效，请尽快处理。",
+                priority=5,
+            )
 
         return {
             "code": 0,
@@ -185,7 +196,7 @@ async def refresh_cookie(DedeUserID):
             "expire_time": expire_timestamp,
         }
     else:
-        log_print(f"[刷新] 刷新失败: {rsp_data.get('message', '未知错误')}", "ERROR")
+        logger.error(f"[刷新] 刷新失败: {rsp_data.get('message', '未知错误')}")
         return {
             "code": rsp_data["code"],
             "message": rsp_data.get("message", "刷新失败"),
@@ -221,8 +232,8 @@ async def check_cookie(DedeUserID):
             logger.debug(f"[检查] 用户 {DedeUserID} 的 Cookie 有效")
         else:
             cookie_data["cookie_valid"] = False
-            log_print(f"[检查] 用户 {DedeUserID} 的 Cookie 无效", "ERROR")
-            await notify_gotify(
+            log_print(f"[检查] 用户 {DedeUserID} 的 Cookie 无效", "WARN")
+            await push_gotify(
                 "[BiliBiliCookieMgmt] Cookie 失效通知",
                 f"用户 {DedeUserID} 的 Cookie 已失效，请尽快处理。",
                 priority=5,
@@ -390,7 +401,7 @@ async def poll_qr(auth_code: str, token: str = Header(None)):
         async with aiohttp.ClientSession() as session:
             async with session.post(url, params=params, headers=headers) as response:
                 data = await response.json()
-        print(data)
+        # print(data)
         if data["code"] == 0:
             login_data = data["data"]
             save_cookie_info(login_data)
