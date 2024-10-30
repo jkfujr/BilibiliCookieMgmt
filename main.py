@@ -44,7 +44,7 @@ GOTIFY_URL = GOTIFY_CONFIG.get("url", "")
 GOTIFY_TOKEN = GOTIFY_CONFIG.get("token", "")
 
 
-async def push_gotify(title: str, message: str, priority: int = 1):
+async def ez_push_gotify(title: str, message: str, priority: int = 1):
     """
     发送 Gotify 通知。
 
@@ -172,7 +172,7 @@ async def refresh_cookie(DedeUserID):
         logger.info(
             f"[刷新] 用户 {DedeUserID} 的 Cookie 刷新成功，有效期至 {expire_time_str}"
         )
-        await push_gotify(
+        await ez_push_gotify(
             "[BiliBiliCookieMgmt] Cookie 刷新通知",
             f"用户 {DedeUserID} 的 Cookie 刷新成功，有效期至 {expire_time_str}",
             priority=5,
@@ -184,7 +184,7 @@ async def refresh_cookie(DedeUserID):
             logger.info(f"[刷新] 用户 {DedeUserID} 的 Cookie 有效")
         else:
             log_print(f"[检查] 用户 {DedeUserID} 的 Cookie 无效", "WARN")
-            await push_gotify(
+            await ez_push_gotify(
                 "[BiliBiliCookieMgmt] Cookie 失效通知",
                 f"用户 {DedeUserID} 的 Cookie 已失效，请尽快处理。",
                 priority=5,
@@ -233,7 +233,7 @@ async def check_cookie(DedeUserID):
         else:
             cookie_data["cookie_valid"] = False
             log_print(f"[检查] 用户 {DedeUserID} 的 Cookie 无效", "WARN")
-            await push_gotify(
+            await ez_push_gotify(
                 "[BiliBiliCookieMgmt] Cookie 失效通知",
                 f"用户 {DedeUserID} 的 Cookie 已失效，请尽快处理。",
                 priority=5,
@@ -358,7 +358,7 @@ async def run(app: FastAPI):
 
 
 # FastAPI
-app = FastAPI(run=run)
+app = FastAPI(lifespan=run)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
