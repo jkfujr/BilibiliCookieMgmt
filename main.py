@@ -95,7 +95,7 @@ def read_cookie(DedeUserID):
 
 
 # 保存Cookie
-def save_cookie_info(login_data):
+def save_cookie(login_data):
     DedeUserID = ""
     for cookie in login_data["cookie_info"]["cookies"]:
         if cookie["name"] == "DedeUserID":
@@ -267,7 +267,7 @@ async def check_all_cookies():
     await asyncio.gather(*tasks)
 
 
-# Cookie到期检查-每天检查定时刷新
+# Cookie健康检查-每天检查定时刷新
 async def refresh_expired_cookies():
     if not os.path.exists(COOKIE_FOLDER):
         logger.debug("[刷新] Cookie 文件夹不存在，无需刷新。")
@@ -294,7 +294,7 @@ async def refresh_expired_cookies():
         logger.debug("[刷新] 没有需要刷新的 Cookie。")
 
 
-# 定时任务：定期检查所有 Cookie
+# 定时任务-定期检查所有 Cookie
 async def periodic_cookie_check():
     try:
         while True:
@@ -310,7 +310,7 @@ async def periodic_cookie_check():
         raise
 
 
-# 定时任务：定期刷新需要刷新的 Cookie
+# 定时任务-定期刷新需要刷新的 Cookie
 async def periodic_cookie_refresh():
     try:
         while True:
@@ -404,7 +404,7 @@ async def poll_qr(auth_code: str, token: str = Header(None)):
         # print(data)
         if data["code"] == 0:
             login_data = data["data"]
-            save_cookie_info(login_data)
+            save_cookie(login_data)
             return JSONResponse(
                 content={"code": 0, "message": "扫码成功", "data": login_data}
             )
@@ -427,19 +427,10 @@ async def poll_qr(auth_code: str, token: str = Header(None)):
 async def get_cookies(DedeUserID: str = Query(None), token: str = Header(None)):
     if DedeUserID:
         await verify_api_token(token)
+
         cookie_data = read_cookie(DedeUserID)
         if cookie_data:
-            expires_in = cookie_data["token_info"]["expires_in"]
-            expire_timestamp = cookie_data["update_time"] + int(expires_in) * 1000
-            return JSONResponse(
-                content={
-                    "DedeUserID": DedeUserID,
-                    "update_time": cookie_data["update_time"],
-                    "expire_time": expire_timestamp,
-                    "check_time": cookie_data.get("check_time"),
-                    "cookie_valid": cookie_data.get("cookie_valid"),
-                }
-            )
+            return JSONResponse(content=cookie_data)
         else:
             raise HTTPException(status_code=404, detail="未找到指定的 Cookie 信息")
     else:
@@ -452,9 +443,7 @@ async def get_cookies(DedeUserID: str = Query(None), token: str = Header(None)):
                         cookie_data = json.load(file)
                         DedeUserID = filename.replace(".json", "")
                         expires_in = cookie_data["token_info"]["expires_in"]
-                        expire_timestamp = (
-                            cookie_data["update_time"] + int(expires_in) * 1000
-                        )
+                        expire_timestamp = cookie_data["update_time"] + int(expires_in) * 1000
                         cookies.append(
                             {
                                 "DedeUserID": DedeUserID,
@@ -465,8 +454,7 @@ async def get_cookies(DedeUserID: str = Query(None), token: str = Header(None)):
                             }
                         )
         return JSONResponse(content=cookies)
-
-
+    
 # Cookie健康检查
 @app.get("/api/cookie/check")
 async def check_cookie_api(DedeUserID: str = Query(...), token: str = Header(None)):
