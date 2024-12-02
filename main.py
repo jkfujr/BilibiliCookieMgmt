@@ -1,7 +1,7 @@
 import os, time, json, yaml, hashlib, asyncio, aiohttp, uvicorn, urllib.parse
 
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, Query, Header
+from fastapi import FastAPI, HTTPException, Query, Header, Request, Body
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -213,7 +213,32 @@ async def check_cookie(DedeUserID):
     cookie_dict = {cookie["name"]: cookie["value"] for cookie in cookies}
     cookie_str = "; ".join([f"{key}={value}" for key, value in cookie_dict.items()])
 
-    # 检查登录状态
+    result = await check_cookie_validity(cookie_str)
+    current_ts = int(time.time() * 1000)
+    cookie_data["check_time"] = current_ts
+
+    # 更新 cookie_data
+    cookie_data["cookie_valid"] = result["code"] == 0
+    file_path = get_cookie_file_path(DedeUserID)
+    with open(file_path, "w", encoding="utf-8") as f:
+        json.dump(cookie_data, f, ensure_ascii=False, indent=4)
+
+    # 发送通知
+    if not cookie_data["cookie_valid"]:
+        log_print(f"[检查] 用户 {DedeUserID} 的 Cookie 无效", "WARN")
+        await ez_push_gotify(
+            "[BiliBiliCookieMgmt] Cookie 失效通知",
+            f"用户 {DedeUserID} 的 Cookie 已失效，请尽快处理。",
+            priority=3,
+        )
+    else:
+        logger.debug(f"[检查] 用户 {DedeUserID} 的 Cookie 有效")
+
+    return result
+
+
+# Cookie健康检查_指定字符串
+async def check_cookie_validity(cookie_str):
     url = "https://api.bilibili.com/x/web-interface/nav"
     headers = {
         "User-Agent": USER_AGENT,
@@ -224,31 +249,13 @@ async def check_cookie(DedeUserID):
         async with aiohttp.ClientSession() as session:
             async with session.get(url, headers=headers, timeout=10) as response:
                 data = await response.json()
-        current_ts = int(time.time() * 1000)
-        cookie_data["check_time"] = current_ts
 
         if data.get("code") == 0 and data.get("data", {}).get("isLogin"):
-            cookie_data["cookie_valid"] = True
-            logger.debug(f"[检查] 用户 {DedeUserID} 的 Cookie 有效")
-        else:
-            cookie_data["cookie_valid"] = False
-            log_print(f"[检查] 用户 {DedeUserID} 的 Cookie 无效", "WARN")
-            await ez_push_gotify(
-                "[BiliBiliCookieMgmt] Cookie 失效通知",
-                f"用户 {DedeUserID} 的 Cookie 已失效，请尽快处理。",
-                priority=5,
-            )
-
-        file_path = get_cookie_file_path(DedeUserID)
-        with open(file_path, "w", encoding="utf-8") as f:
-            json.dump(cookie_data, f, ensure_ascii=False, indent=4)
-
-        if cookie_data["cookie_valid"]:
             return {"code": 0, "message": "Cookie 有效"}
         else:
             return {"code": -2, "message": "Cookie 无效"}
     except Exception as e:
-        log_print(f"[检查] 检查用户 {DedeUserID} 失败: {e}", "ERROR")
+        log_print(f"[检查] 检查 Cookie 失败: {e}", "ERROR")
         return {"code": -1, "message": "检查失败"}
 
 
@@ -455,7 +462,7 @@ async def get_cookies(DedeUserID: str = Query(None), token: str = Header(None)):
                         )
         return JSONResponse(content=cookies)
     
-# Cookie健康检查
+# 检查Cookie
 @app.get("/api/cookie/check")
 async def check_cookie_api(DedeUserID: str = Query(...), token: str = Header(None)):
     await verify_api_token(token)
@@ -473,8 +480,27 @@ async def check_cookie_api(DedeUserID: str = Query(...), token: str = Header(Non
             }
         )
 
+# 检查所有Cookie
+@app.get("/api/cookie/check_all")
+async def check_all_cookies_api(token: str = Header(None)):
+    await verify_api_token(token)
+    await check_all_cookies()
+    return JSONResponse(content={"code": 0, "message": "所有Cookie检查完成"})
 
-# Cookie刷新
+# 检查指定Cookie
+@app.post("/api/cookie/test")
+async def test_cookie_api(
+    cookie: str = Body(..., embed=True),
+    token: str = Header(None)
+):
+    await verify_api_token(token)
+    if not cookie:
+        raise HTTPException(status_code=400, detail="缺少 cookie 参数")
+
+    result = await check_cookie_validity(cookie)
+    return JSONResponse(content=result)
+
+# 刷新Cookie
 @app.get("/api/cookie/refresh")
 async def refresh_cookie_api(DedeUserID: str = Query(...), token: str = Header(None)):
     await verify_api_token(token)
@@ -491,6 +517,14 @@ async def refresh_cookie_api(DedeUserID: str = Query(...), token: str = Header(N
         return JSONResponse(
             content={"code": result["code"], "message": result["message"]}
         )
+
+# 刷新所有Cookie
+@app.get("/api/cookie/refresh_all")
+async def refresh_all_cookies_api(token: str = Header(None)):
+    await verify_api_token(token)
+    await refresh_expired_cookies()
+    return JSONResponse(content={"code": 0, "message": "需要刷新过期的Cookie已刷新"})
+
 
 
 # 启动应用
