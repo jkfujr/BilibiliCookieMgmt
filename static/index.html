@@ -83,7 +83,7 @@
       white-space: nowrap;
     }
 
-    /* 开始扫码按钮 */
+    /* 扫码按钮 */
     #startButton {
       padding: 10px 20px;
       font-size: 16px;
@@ -111,7 +111,7 @@
       resize: both;
     }
 
-    /* 弹窗标题栏 */
+    /* 弹窗标题 */
     .modal-header {
       height: 30px;
       cursor: move;
@@ -126,7 +126,7 @@
       cursor: pointer;
     }
 
-    /* 弹窗内容区域 */
+    /* 弹窗内容 */
     .modal-content {
       margin-top: 0;
       height: calc(100% - 40px);
@@ -153,7 +153,7 @@
       background: #f0f0f0;
     }
 
-    /* 分页内容 */
+    /* 分页 */
     #contentContainer {
       padding: 0;
       height: calc(100% - 70px);
@@ -335,7 +335,6 @@
           centerModal();
         }
 
-      
         function closeModal() {
           const modal = document.getElementById("modal");
           modal.style.display = "none";

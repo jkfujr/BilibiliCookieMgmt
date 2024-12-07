@@ -21,7 +21,8 @@ COOKIE_CHECK:
 COOKIE_REFRESH:
   # 是否启用
   enable: true
-  # 刷新间隔(天)
+  # 刷新时间(天)
+  # 如果cookie剩余有效期小于该时间, 就尝试刷新cookie
   refresh_intlval: 30
 
 PUSH:

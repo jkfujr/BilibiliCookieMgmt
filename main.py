@@ -13,12 +13,9 @@ logger = log()
 # 一些常量
 APP_KEY = "4409e2ce8ffd12b8"
 APP_SEC = "59b43e04ad6965f34319062b478f83dd"
-USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36 Edg/128.0.0.0"
-)
+USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36 GLS/100.10.9939.100"
 
-# DQ配置文件
+# 读取配置
 config_file_path = os.path.join(os.path.dirname(__file__), "config.yaml")
 with open(config_file_path, "r", encoding="utf-8") as f:
     config = yaml.safe_load(f)
@@ -68,8 +65,6 @@ async def ez_push_gotify(title: str, message: str, priority: int = 1):
     else:
         logger.debug("[Gotify] Gotify 未启用或配置不完整，跳过通知。")
 
-
-# 为请求参数进行 API 签名
 def tvsign(params, appkey=APP_KEY, appsec=APP_SEC):
     params.update({"appkey": appkey})
     params = dict(sorted(params.items()))
@@ -461,7 +456,8 @@ async def get_cookies(DedeUserID: str = Query(None), token: str = Header(None)):
                             }
                         )
         return JSONResponse(content=cookies)
-    
+
+
 # 检查Cookie
 @app.get("/api/cookie/check")
 async def check_cookie_api(DedeUserID: str = Query(...), token: str = Header(None)):
@@ -485,7 +481,7 @@ async def check_cookie_api(DedeUserID: str = Query(...), token: str = Header(Non
 async def check_all_cookies_api(token: str = Header(None)):
     await verify_api_token(token)
     await check_all_cookies()
-    return JSONResponse(content={"code": 0, "message": "所有Cookie检查完成"})
+    return JSONResponse(content={"code": 0, "message": "已检查所有Cookie"})
 
 # 检查指定Cookie
 @app.post("/api/cookie/test")
@@ -523,7 +519,7 @@ async def refresh_cookie_api(DedeUserID: str = Query(...), token: str = Header(N
 async def refresh_all_cookies_api(token: str = Header(None)):
     await verify_api_token(token)
     await refresh_expired_cookies()
-    return JSONResponse(content={"code": 0, "message": "需要刷新过期的Cookie已刷新"})
+    return JSONResponse(content={"code": 0, "message": "已刷新所有Cookie"})
 
 
 
