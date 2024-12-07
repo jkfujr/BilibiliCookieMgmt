@@ -1,20 +1,21 @@
 # 简介
 
-![截图_2024-09-15_18-48-15](https://github.com/user-attachments/assets/cea81214-596f-4208-af4c-c70c3e273bfc)
+![截图_2024-12-08_01-52-12](https://github.com/user-attachments/assets/872a4642-f1b8-4e69-a4e7-f75b9aa915d1)
 
 一个 python 实现的 BILIBILI COOKIE 管理器
 
-## 当前功能
+## 功能
 
-- WEB 状态
+- 简单的web管理
 - 消息推送
   - Gotify
 - COOKIE
+  - 扫码登录
   - 定时健康检查
-  - 定时刷新 (到期一个月前)
+  - 定时刷新 (默认到期一个月前)
   - API
 
-# 使用说明
+# 说明
 
 **_需要 Python 3.10 及以上版本_**
 
@@ -24,13 +25,9 @@
 
 # TODO
 
-- WEB 状态总览
-  - (暂无)
 - 消息推送
   - WEBHOOK
   - EMAIL
-- COOKIE
-  - (暂无)
 
 # 联系方式
 
