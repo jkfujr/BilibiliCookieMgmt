@@ -1,6 +1,6 @@
 # 简介
 
-![截图_2024-12-08_01-52-12](https://github.com/user-attachments/assets/872a4642-f1b8-4e69-a4e7-f75b9aa915d1)
+![截图_2024-12-08_02-29-19](https://github.com/user-attachments/assets/a2f4895a-2588-42cc-a0c0-cc9f801ca563)
 
 一个 python 实现的 BILIBILI COOKIE 管理器
 
