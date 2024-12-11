@@ -698,7 +698,7 @@
             const cookieString =
               requiredKeys
                 .map((key) => `${key}=${cookieDict[key] || ""}`)
-                .join("; ") + ";";
+                .join(";") + ";";
       
             showCookiePopup(cookieString, cookieData);
           } catch (error) {

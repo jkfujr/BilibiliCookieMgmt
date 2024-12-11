@@ -1,7 +1,8 @@
+import random
 import os, time, json, yaml, hashlib, asyncio, aiohttp, uvicorn, urllib.parse
 
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, Query, Header, Request, Body
+from fastapi import FastAPI, HTTPException, Query, Header, Body
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -457,6 +458,24 @@ async def get_cookies(DedeUserID: str = Query(None), token: str = Header(None)):
                         )
         return JSONResponse(content=cookies)
 
+# 返回随机有效cookie
+@app.get("/api/cookie/random")
+async def get_random_cookie(token: str = Header(None)):
+    await verify_api_token(token)
+    valid_cookies = []
+    if os.path.exists(COOKIE_FOLDER):
+        for filename in os.listdir(COOKIE_FOLDER):
+            if filename.endswith(".json"):
+                file_path = os.path.join(COOKIE_FOLDER, filename)
+                with open(file_path, "r", encoding="utf-8") as file:
+                    cookie_data = json.load(file)
+                    if cookie_data.get("cookie_valid") is True:
+                        valid_cookies.append(cookie_data)
+    if not valid_cookies:
+        raise HTTPException(status_code=404, detail="无可用的有效 Cookie")
+    
+    chosen_cookie = random.choice(valid_cookies)
+    return JSONResponse(content=chosen_cookie)
 
 # 检查Cookie
 @app.get("/api/cookie/check")
