@@ -16,6 +16,8 @@ APP_KEY = "4409e2ce8ffd12b8"
 APP_SEC = "59b43e04ad6965f34319062b478f83dd"
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36 GLS/100.10.9939.100"
 
+auth_code_cache = {}
+
 # 读取配置
 config_file_path = os.path.join(os.path.dirname(__file__), "config.yaml")
 with open(config_file_path, "r", encoding="utf-8") as f:
@@ -84,8 +86,12 @@ def get_cookie_file_path(DedeUserID):
 def read_cookie(DedeUserID):
     file_path = get_cookie_file_path(DedeUserID)
     if os.path.exists(file_path):
-        with open(file_path, "r", encoding="utf-8") as file:
-            return json.load(file)
+        try:
+            with open(file_path, "r", encoding="utf-8") as file:
+                return json.load(file)
+        except json.JSONDecodeError as e:
+            logger.error(f"[读取] 用户 {DedeUserID} 的 Cookie 文件格式无效: {e}")
+            return None
     else:
         return None
 
@@ -264,10 +270,27 @@ async def check_all_cookies():
     for filename in os.listdir(COOKIE_FOLDER):
         if filename.endswith(".json"):
             DedeUserID = filename.replace(".json", "")
+            file_path = os.path.join(COOKIE_FOLDER, filename)
+            
+            # 检查文件是否为空或无效
+            try:
+                with open(file_path, "r", encoding="utf-8") as file:
+                    file_content = file.read().strip()
+                    if not file_content:
+                        logger.warning(f"[检查] 用户 {DedeUserID} 的 Cookie 文件为空，跳过检查")
+                        continue
+                    json.loads(file_content)  # 尝试解析JSON
+            except (json.JSONDecodeError, IOError) as e:
+                logger.error(f"[检查] 用户 {DedeUserID} 的 Cookie 文件无效: {e}")
+                continue
+                
             logger.debug(f"[检查] 正在检查用户 {DedeUserID} 的 Cookie...")
             task = asyncio.create_task(check_cookie(DedeUserID))
             tasks.append(task)
-    await asyncio.gather(*tasks)
+    if tasks:
+        await asyncio.gather(*tasks)
+    else:
+        logger.debug("[检查] 没有有效的 Cookie 文件需要检查。")
 
 
 # Cookie健康检查-每天检查定时刷新
@@ -279,7 +302,20 @@ async def refresh_expired_cookies():
     for filename in os.listdir(COOKIE_FOLDER):
         if filename.endswith(".json"):
             DedeUserID = filename.replace(".json", "")
-            cookie_data = read_cookie(DedeUserID)
+            file_path = os.path.join(COOKIE_FOLDER, filename)
+            
+            # 检查文件是否为空或无效
+            try:
+                with open(file_path, "r", encoding="utf-8") as file:
+                    file_content = file.read().strip()
+                    if not file_content:
+                        logger.warning(f"[刷新] 用户 {DedeUserID} 的 Cookie 文件为空，跳过刷新")
+                        continue
+                    cookie_data = json.loads(file_content)
+            except (json.JSONDecodeError, IOError) as e:
+                logger.error(f"[刷新] 用户 {DedeUserID} 的 Cookie 文件无效: {e}")
+                continue
+                
             if cookie_data:
                 update_time = cookie_data.get("update_time", 0)
                 current_time = int(time.time() * 1000)
@@ -442,20 +478,36 @@ async def get_cookies(DedeUserID: str = Query(None), token: str = Header(None)):
             for filename in os.listdir(COOKIE_FOLDER):
                 if filename.endswith(".json"):
                     file_path = os.path.join(COOKIE_FOLDER, filename)
-                    with open(file_path, "r", encoding="utf-8") as file:
-                        cookie_data = json.load(file)
-                        DedeUserID = filename.replace(".json", "")
-                        expires_in = cookie_data["token_info"]["expires_in"]
-                        expire_timestamp = cookie_data["update_time"] + int(expires_in) * 1000
-                        cookies.append(
-                            {
-                                "DedeUserID": DedeUserID,
-                                "update_time": cookie_data["update_time"],
-                                "expire_time": expire_timestamp,
-                                "check_time": cookie_data.get("check_time"),
-                                "cookie_valid": cookie_data.get("cookie_valid"),
-                            }
-                        )
+                    try:
+                        with open(file_path, "r", encoding="utf-8") as file:
+                            file_content = file.read().strip()
+                            if not file_content:  # 检查文件是否为空
+                                logger.warning(f"[读取] 文件 {filename} 为空，跳过")
+                                continue
+                            
+                            cookie_data = json.loads(file_content)
+                            DedeUserID = filename.replace(".json", "")
+                            
+                            # 检查必要的字段是否存在
+                            if "token_info" not in cookie_data or "update_time" not in cookie_data:
+                                logger.warning(f"[读取] 文件 {filename} 缺少必要字段，跳过")
+                                continue
+                                
+                            expires_in = cookie_data["token_info"].get("expires_in", 0)
+                            expire_timestamp = cookie_data["update_time"] + int(expires_in) * 1000
+                            cookies.append(
+                                {
+                                    "DedeUserID": DedeUserID,
+                                    "update_time": cookie_data["update_time"],
+                                    "expire_time": expire_timestamp,
+                                    "check_time": cookie_data.get("check_time"),
+                                    "cookie_valid": cookie_data.get("cookie_valid"),
+                                }
+                            )
+                    except (json.JSONDecodeError, KeyError, TypeError) as e:
+                        logger.error(f"[读取] 解析文件 {filename} 时出错: {e}")
+                        # 可以选择删除或重命名无效的文件
+                        # os.rename(file_path, file_path + ".invalid")
         return JSONResponse(content=cookies)
 
 # 返回随机有效cookie
@@ -467,10 +519,18 @@ async def get_random_cookie(token: str = Header(None)):
         for filename in os.listdir(COOKIE_FOLDER):
             if filename.endswith(".json"):
                 file_path = os.path.join(COOKIE_FOLDER, filename)
-                with open(file_path, "r", encoding="utf-8") as file:
-                    cookie_data = json.load(file)
-                    if cookie_data.get("cookie_valid") is True:
-                        valid_cookies.append(cookie_data)
+                try:
+                    with open(file_path, "r", encoding="utf-8") as file:
+                        file_content = file.read().strip()
+                        if not file_content:  # 检查文件是否为空
+                            continue
+                            
+                        cookie_data = json.loads(file_content)
+                        if cookie_data.get("cookie_valid") is True:
+                            valid_cookies.append(cookie_data)
+                except (json.JSONDecodeError, KeyError) as e:
+                    logger.error(f"[随机] 解析文件 {filename} 时出错: {e}")
+                    continue
     if not valid_cookies:
         raise HTTPException(status_code=404, detail="无可用的有效 Cookie")
     
