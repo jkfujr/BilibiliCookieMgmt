@@ -1,5 +1,4 @@
-import random
-import os, time, json, yaml, hashlib, asyncio, aiohttp, uvicorn, urllib.parse
+import os, time, json, yaml, random, hashlib, asyncio, aiohttp, uvicorn, urllib.parse
 
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Query, Header, Body
@@ -118,6 +117,18 @@ def save_cookie(login_data):
     os.makedirs(os.path.dirname(file_path), exist_ok=True)
     with open(file_path, "w", encoding="utf-8") as f:
         json.dump(save_info, f, ensure_ascii=False, indent=4)
+    
+    # 检查文件是否成功写入且不为空
+    if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
+        logger.info(f"[保存] 用户 {DedeUserID} 的 Cookie 保存成功")
+    else:
+        error_msg = f"[保存] 用户 {DedeUserID} 的 Cookie 文件保存失败或为空"
+        log_print(error_msg, "ERROR")
+        asyncio.create_task(ez_push_gotify(
+            "[BiliBiliCookieMgmt] Cookie 保存异常",
+            error_msg,
+            priority=5
+        ))
 
 
 # 刷新Cookie
@@ -267,26 +278,46 @@ async def check_all_cookies():
         logger.debug("[检查] Cookie 文件夹不存在，无需检查。")
         return
     tasks = []
+    empty_files = []
+    invalid_files = []
+    
     for filename in os.listdir(COOKIE_FOLDER):
         if filename.endswith(".json"):
             DedeUserID = filename.replace(".json", "")
             file_path = os.path.join(COOKIE_FOLDER, filename)
             
-            # 检查文件是否为空或无效
+            # 检查是否为空
             try:
                 with open(file_path, "r", encoding="utf-8") as file:
                     file_content = file.read().strip()
                     if not file_content:
                         logger.warning(f"[检查] 用户 {DedeUserID} 的 Cookie 文件为空，跳过检查")
+                        empty_files.append(DedeUserID)
                         continue
-                    json.loads(file_content)  # 尝试解析JSON
+                    json.loads(file_content)
             except (json.JSONDecodeError, IOError) as e:
                 logger.error(f"[检查] 用户 {DedeUserID} 的 Cookie 文件无效: {e}")
+                invalid_files.append(DedeUserID)
                 continue
                 
             logger.debug(f"[检查] 正在检查用户 {DedeUserID} 的 Cookie...")
             task = asyncio.create_task(check_cookie(DedeUserID))
             tasks.append(task)
+    
+    # 发送空文件和无效文件的通知
+    if empty_files or invalid_files:
+        message = ""
+        if empty_files:
+            message += f"发现 {len(empty_files)} 个空的 Cookie 文件: {', '.join(empty_files)}\n\n"
+        if invalid_files:
+            message += f"发现 {len(invalid_files)} 个无效的 Cookie 文件: {', '.join(invalid_files)}"
+        
+        await ez_push_gotify(
+            "[BiliBiliCookieMgmt] Cookie 文件异常",
+            message.strip(),
+            priority=4
+        )
+    
     if tasks:
         await asyncio.gather(*tasks)
     else:
@@ -299,21 +330,26 @@ async def refresh_expired_cookies():
         logger.debug("[刷新] Cookie 文件夹不存在，无需刷新。")
         return
     tasks = []
+    empty_files = []
+    invalid_files = []
+    
     for filename in os.listdir(COOKIE_FOLDER):
         if filename.endswith(".json"):
             DedeUserID = filename.replace(".json", "")
             file_path = os.path.join(COOKIE_FOLDER, filename)
             
-            # 检查文件是否为空或无效
+            # 检查空文件
             try:
                 with open(file_path, "r", encoding="utf-8") as file:
                     file_content = file.read().strip()
                     if not file_content:
                         logger.warning(f"[刷新] 用户 {DedeUserID} 的 Cookie 文件为空，跳过刷新")
+                        empty_files.append(DedeUserID)
                         continue
                     cookie_data = json.loads(file_content)
             except (json.JSONDecodeError, IOError) as e:
                 logger.error(f"[刷新] 用户 {DedeUserID} 的 Cookie 文件无效: {e}")
+                invalid_files.append(DedeUserID)
                 continue
                 
             if cookie_data:
@@ -327,13 +363,28 @@ async def refresh_expired_cookies():
                     )
                     task = asyncio.create_task(refresh_cookie(DedeUserID))
                     tasks.append(task)
+    
+    # 发送空文件通知
+    if empty_files or invalid_files:
+        message = ""
+        if empty_files:
+            message += f"刷新时发现 {len(empty_files)} 个空的 Cookie 文件: {', '.join(empty_files)}\n\n"
+        if invalid_files:
+            message += f"刷新时发现 {len(invalid_files)} 个无效的 Cookie 文件: {', '.join(invalid_files)}"
+        
+        await ez_push_gotify(
+            "[BiliBiliCookieMgmt] Cookie 文件异常",
+            message.strip(),
+            priority=4
+        )
+    
     if tasks:
         await asyncio.gather(*tasks)
     else:
         logger.debug("[刷新] 没有需要刷新的 Cookie。")
 
 
-# 定时任务-定期检查所有 Cookie
+# 定时-检查所有 Cookie
 async def periodic_cookie_check():
     try:
         while True:
@@ -349,7 +400,7 @@ async def periodic_cookie_check():
         raise
 
 
-# 定时任务-定期刷新需要刷新的 Cookie
+# 定时-刷新需要刷新的 Cookie
 async def periodic_cookie_refresh():
     try:
         while True:
@@ -444,6 +495,18 @@ async def poll_qr(auth_code: str, token: str = Header(None)):
         if data["code"] == 0:
             login_data = data["data"]
             save_cookie(login_data)
+            
+            # 扫码成功执行检查
+            DedeUserID = ""
+            for cookie in login_data["cookie_info"]["cookies"]:
+                if cookie["name"] == "DedeUserID":
+                    DedeUserID = cookie["value"]
+                    break
+            
+            if DedeUserID:
+                logger.info(f"[登录] 用户 {DedeUserID} 扫码登录成功，正在检查 Cookie 有效性...")
+                await check_cookie(DedeUserID)
+            
             return JSONResponse(
                 content={"code": 0, "message": "扫码成功", "data": login_data}
             )
@@ -481,7 +544,7 @@ async def get_cookies(DedeUserID: str = Query(None), token: str = Header(None)):
                     try:
                         with open(file_path, "r", encoding="utf-8") as file:
                             file_content = file.read().strip()
-                            if not file_content:  # 检查文件是否为空
+                            if not file_content:
                                 logger.warning(f"[读取] 文件 {filename} 为空，跳过")
                                 continue
                             
@@ -522,7 +585,7 @@ async def get_random_cookie(token: str = Header(None)):
                 try:
                     with open(file_path, "r", encoding="utf-8") as file:
                         file_content = file.read().strip()
-                        if not file_content:  # 检查文件是否为空
+                        if not file_content:
                             continue
                             
                         cookie_data = json.loads(file_content)
