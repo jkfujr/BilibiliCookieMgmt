@@ -573,9 +573,9 @@ async def get_cookies(DedeUserID: str = Query(None), token: str = Header(None)):
                         # os.rename(file_path, file_path + ".invalid")
         return JSONResponse(content=cookies)
 
-# 返回随机有效cookie
+# 随机返回有效cookie
 @app.get("/api/cookie/random")
-async def get_random_cookie(token: str = Header(None)):
+async def get_random_cookie(token: str = Header(None), type: str = Query(None)):
     await verify_api_token(token)
     valid_cookies = []
     if os.path.exists(COOKIE_FOLDER):
@@ -598,6 +598,18 @@ async def get_random_cookie(token: str = Header(None)):
         raise HTTPException(status_code=404, detail="无可用的有效 Cookie")
     
     chosen_cookie = random.choice(valid_cookies)
+    
+    if type == "sim":
+        try:
+            cookies = chosen_cookie["cookie_info"]["cookies"]
+            cookie_dict = {cookie["name"]: cookie["value"] for cookie in cookies}
+            required_keys = ["DedeUserID", "DedeUserID__ckMd5", "SESSDATA", "bili_jct"]
+            cookie_string = "".join([f"{key}={cookie_dict.get(key, '')};" for key in required_keys])
+            return JSONResponse(content={"code": 0, "message": "获取成功", "cookie": cookie_string})
+        except KeyError as e:
+            logger.error(f"[随机] 生成标准格式Cookie字符串失败: {e}")
+            raise HTTPException(status_code=500, detail="生成Cookie字符串失败")
+
     return JSONResponse(content=chosen_cookie)
 
 # 检查Cookie
@@ -625,7 +637,7 @@ async def check_all_cookies_api(token: str = Header(None)):
     await check_all_cookies()
     return JSONResponse(content={"code": 0, "message": "已检查所有Cookie"})
 
-# 检查指定Cookie
+# 测试Cookie
 @app.post("/api/cookie/test")
 async def test_cookie_api(
     cookie: str = Body(..., embed=True),
@@ -663,6 +675,27 @@ async def refresh_all_cookies_api(token: str = Header(None)):
     await refresh_expired_cookies()
     return JSONResponse(content={"code": 0, "message": "已刷新所有Cookie"})
 
+# 删除Cookie
+@app.delete("/api/cookie/delete")
+async def delete_cookie_api(DedeUserID: str = Query(...), token: str = Header(None)):
+    await verify_api_token(token)
+    file_path = get_cookie_file_path(DedeUserID)
+    
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="指定的 Cookie 文件不存在")
+        
+    try:
+        os.remove(file_path)
+        logger.info(f"[删除] 用户 {DedeUserID} 的 Cookie 文件已删除")
+        await ez_push_gotify(
+            "[BiliBiliCookieMgmt] Cookie 删除通知",
+            f"用户 {DedeUserID} 的 Cookie 文件已被删除。",
+            priority=5
+        )
+        return JSONResponse(content={"code": 0, "message": "删除成功"})
+    except Exception as e:
+        logger.error(f"[删除] 删除 Cookie 文件失败: {e}")
+        raise HTTPException(status_code=500, detail=f"删除文件失败: {str(e)}")
 
 
 # 启动应用

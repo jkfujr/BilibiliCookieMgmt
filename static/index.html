@@ -452,6 +452,8 @@
                       <button class="checkButton" data-dedeuserid="${item.DedeUserID}">检查</button>
                       |
                       <button class="refreshButton" data-dedeuserid="${item.DedeUserID}">刷新</button>
+                      |
+                      <button class="deleteButton" data-dedeuserid="${item.DedeUserID}">删除</button>
                     </td>
                   </tr>
                 `;
@@ -479,6 +481,14 @@
               button.addEventListener("click", () => {
                 const DedeUserID = button.getAttribute("data-dedeuserid");
                 viewCookie(DedeUserID);
+              });
+            });
+
+            const deleteButtons = document.querySelectorAll(".deleteButton");
+            deleteButtons.forEach((button) => {
+              button.addEventListener("click", () => {
+                const DedeUserID = button.getAttribute("data-dedeuserid");
+                deleteCookie(DedeUserID);
               });
             });
           } catch (error) {
@@ -801,6 +811,38 @@
           } catch (error) {
             console.error("刷新所有Cookie失败:", error);
             alert("刷新失败，网络错误或服务器异常。");
+          }
+        }
+      
+        // 删除 Cookie
+        async function deleteCookie(DedeUserID) {
+          try {
+            const token = localStorage.getItem("api_token");
+            if (!token) {
+              alert("请先登录以提供 API Token。");
+              return;
+            }
+
+            const confirmDelete = confirm(
+              `确定要删除用户 ${DedeUserID} 的 Cookie 吗？此操作不可恢复！`
+            );
+            if (!confirmDelete) return;
+
+            const response = await axios.delete(`/api/cookie/delete`, {
+              params: { DedeUserID: DedeUserID },
+              headers: { token: token },
+            });
+            
+            const data = response.data;
+            if (data.code === 0) {
+              alert("Cookie 删除成功！");
+              loadAccountStatus();
+            } else {
+              alert(`删除失败: ${data.message}`);
+            }
+          } catch (error) {
+            console.error("删除失败:", error);
+            alert("删除失败，网络错误或服务器异常。");
           }
         }
       
