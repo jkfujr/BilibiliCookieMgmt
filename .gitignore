@@ -3,4 +3,7 @@
 config.yaml
 logs
 data
+build
+dist
+.spec
 __pycache__

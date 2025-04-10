@@ -1,4 +1,4 @@
-import os, time, json, yaml, random, hashlib, asyncio, aiohttp, uvicorn, urllib.parse
+import os, time, json, yaml, random, hashlib, asyncio, aiohttp, uvicorn, urllib.parse, sys
 
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Query, Header, Body
@@ -18,10 +18,21 @@ USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTM
 auth_code_cache = {}
 
 # 读取配置
-config_file_path = os.path.join(os.path.dirname(__file__), "config.yaml")
-with open(config_file_path, "r", encoding="utf-8") as f:
-    config = yaml.safe_load(f)
+def get_config_path():
+    return os.path.join(os.getcwd(), "config.yaml")
 
+try:
+    config_file_path = get_config_path()
+    if not os.path.exists(config_file_path):
+        log_print("配置文件不存在，请确保 config.yaml 文件位于程序运行目录下", "ERROR")
+        sys.exit(1)
+        
+    with open(config_file_path, "r", encoding="utf-8") as f:
+        config = yaml.safe_load(f)
+    logger.info(f"成功加载配置文件: {config_file_path}")
+except Exception as e:
+    log_print(f"加载配置文件失败: {e}", "ERROR")
+    sys.exit(1)
 
 # Cookie 目录
 COOKIE_FOLDER = os.path.join("data", "cookie")
