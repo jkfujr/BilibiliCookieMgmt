@@ -10,6 +10,9 @@ API_TOKEN:
   # token值
   token: 1145141919810
 
+# Cookie存储文件夹
+COOKIE_FOLDER: "data/cookie"
+
 # Cookie自动健康检查
 COOKIE_CHECK:
   # 是否启用

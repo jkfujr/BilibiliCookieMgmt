@@ -1,6 +1,7 @@
-import asyncio
-import httpx
-import logging
+import asyncio, httpx, logging
+
+from core.config import get_config
+from core.logs import log_print
 
 """
 Gotify模块
@@ -18,6 +19,13 @@ Gotify模块
             priority: 消息优先级，默认值为1。
             max_retries: 最大重试次数，默认值为3。
             retry_delay: 重试间隔时间（秒），默认值为3。
+    
+    ez_push_gotify(title, message, priority=1)
+        简化的Gotify推送函数，自动从配置中获取服务器信息。
+        参数：
+            title: 消息标题。
+            message: 消息内容。
+            priority: 消息优先级，默认值为1。
 """
 
 # 禁用请求日志
@@ -51,3 +59,20 @@ async def push_gotify(ip, token, title, message, priority=1, max_retries=3, retr
             await asyncio.sleep(retry_delay)
         else:
             logging.error(f"[Gotify] 信息推送失败：达到最大重试次数 {max_retries} 次")
+
+async def ez_push_gotify(title: str, message: str, priority: int = 1):
+    app_config = get_config()
+    if app_config.push.gotify_enabled and app_config.push.gotify_url and app_config.push.gotify_token:
+        try:
+            await push_gotify(
+                app_config.push.gotify_url,
+                app_config.push.gotify_token,
+                title,
+                message,
+                priority=priority,
+            )
+            logging.info(f"[Gotify] 通知已发送: {title}")
+        except Exception as e:
+            log_print(f"[Gotify] 推送通知失败: {e}", "ERROR")
+    else:
+        logging.debug("[Gotify] Gotify 未启用或配置不完整，跳过通知。")
