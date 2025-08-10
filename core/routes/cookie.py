@@ -16,9 +16,17 @@ async def verify_api_token(token: str = Header(None)):
     config_manager = get_config_manager()
     app_config = config_manager.config
     
-    if app_config.server.api_token:
-        if token != app_config.server.api_token:
-            raise HTTPException(status_code=401, detail="无效或缺失的 API Token")
+    # 检查API Token是否启用
+    if not app_config.server.api_token_enabled:
+        return  # API Token未启用，直接通过
+    
+    # 检查token是否提供
+    if not token:
+        raise HTTPException(status_code=401, detail="缺失 API Token")
+    
+    # 验证token是否匹配
+    if token != str(app_config.server.api_token):
+        raise HTTPException(status_code=401, detail="无效的 API Token")
 
 
 # 获取Cookie信息
@@ -70,6 +78,7 @@ async def get_cookies(DedeUserID: str = Query(None), token: str = Header(None)):
                                 cookie_valid = mgmt_data.get("cookie_valid")
                                 check_time = mgmt_data.get("last_check_time")
                                 refresh_status = mgmt_data.get("refresh_status", "unknown")
+                                enabled = mgmt_data.get("enabled", True)
                                 
                                 expires_in = cookie_data["token_info"].get("expires_in", 0)
                                 expire_timestamp = update_time + int(expires_in) * 1000
@@ -82,6 +91,7 @@ async def get_cookies(DedeUserID: str = Query(None), token: str = Header(None)):
                                         "check_time": check_time,
                                         "cookie_valid": cookie_valid,
                                         "refresh_status": refresh_status,
+                                        "enabled": enabled,
                                     }
                                 )
                             else:
@@ -119,7 +129,8 @@ async def get_random_cookie(token: str = Header(None), type: str = Query(None)):
                         
                         if "_cookiemgmt" in cookie_data:
                             is_valid = cookie_data["_cookiemgmt"].get("cookie_valid", False)
-                            if is_valid is True:
+                            is_enabled = cookie_data["_cookiemgmt"].get("enabled", True)
+                            if is_valid is True and is_enabled is not False:
                                 valid_cookies.append(cookie_data)
                         else:
                             logger.warning(f"[随机] 文件 {filename} 使用旧格式，跳过")
@@ -234,3 +245,51 @@ async def delete_cookie_api(DedeUserID: str = Query(...), token: str = Header(No
     except Exception as e:
         logger.error(f"[删除] 删除 Cookie 文件失败: {e}")
         raise HTTPException(status_code=500, detail=f"删除文件失败: {str(e)}")
+
+
+# 切换Cookie启用状态
+@router.post("/api/cookie/toggle")
+async def toggle_cookie_enabled(
+    DedeUserID: str = Body(..., embed=True),
+    token: str = Header(None)
+):
+    await verify_api_token(token)
+    
+    from core.config import get_config_manager
+    config_manager = get_config_manager()
+    app_config = config_manager.config
+    COOKIE_FOLDER = app_config.cookie.folder
+    
+    file_path = get_cookie_file_path(DedeUserID)
+    
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="指定的 Cookie 文件不存在")
+    
+    try:
+        with open(file_path, "r", encoding="utf-8") as file:
+            cookie_data = json.load(file)
+        
+        if "_cookiemgmt" not in cookie_data:
+            cookie_data["_cookiemgmt"] = {}
+        
+        current_enabled = cookie_data["_cookiemgmt"].get("enabled", True)
+        new_enabled = not current_enabled
+        cookie_data["_cookiemgmt"]["enabled"] = new_enabled
+        
+        with open(file_path, "w", encoding="utf-8") as file:
+            json.dump(cookie_data, file, ensure_ascii=False, indent=2)
+        
+        logger.info(f"[切换] 用户 {DedeUserID} 的启用状态已切换为: {new_enabled}")
+        
+        return JSONResponse(content={
+            "code": 0,
+            "message": "切换成功",
+            "enabled": new_enabled
+        })
+        
+    except (json.JSONDecodeError, KeyError) as e:
+        logger.error(f"[切换] 处理 Cookie 文件失败: {e}")
+        raise HTTPException(status_code=500, detail=f"处理文件失败: {str(e)}")
+    except Exception as e:
+        logger.error(f"[切换] 切换启用状态失败: {e}")
+        raise HTTPException(status_code=500, detail=f"切换失败: {str(e)}")

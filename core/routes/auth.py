@@ -16,9 +16,14 @@ async def verify_api_token(token: str = Header(None)):
     config_manager = get_config_manager()
     app_config = config_manager.config
     
-    if app_config.server.api_token:
-        if token != app_config.server.api_token:
-            raise HTTPException(status_code=401, detail="无效或缺失的 API Token")
+    if not app_config.server.api_token_enabled:
+        return
+    
+    if not token:
+        raise HTTPException(status_code=401, detail="缺失 API Token")
+    
+    if token != str(app_config.server.api_token):
+        raise HTTPException(status_code=401, detail="无效的 API Token")
 
 
 # 生成二维码

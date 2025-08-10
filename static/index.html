@@ -217,6 +217,45 @@
       margin-top: 10px;
     }
 
+    /* 切换开关样式 */
+    .toggle-switch {
+      position: relative;
+      width: 50px;
+      height: 24px;
+      background-color: #ccc;
+      border-radius: 12px;
+      cursor: pointer;
+      transition: background-color 0.3s;
+      display: inline-block;
+    }
+
+    .toggle-switch.enabled {
+      background-color: #4CAF50;
+    }
+
+    .toggle-switch.disabled {
+      background-color: #ccc;
+    }
+
+    .toggle-slider {
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      width: 20px;
+      height: 20px;
+      background-color: white;
+      border-radius: 50%;
+      transition: transform 0.3s;
+    }
+
+    .toggle-switch.enabled .toggle-slider {
+      transform: translateX(26px);
+    }
+
+    .toggle-switch.disabled .toggle-slider {
+      transform: translateX(0);
+    }
+
     </style>
   </head>
   <body>
@@ -248,6 +287,7 @@
         <thead>
           <tr>
             <th class="col-id">用户ID</th>
+            <th class="col-enabled">是否启用</th>
             <th class="col-update-time">更新时间</th>
             <th class="col-expire-time">过期时间</th>
             <th class="col-status">Cookie状态</th>
@@ -439,9 +479,17 @@
                     : item.cookie_valid === false
                     ? "无效"
                     : "未知";
+                const enabledStatus = item.enabled !== false;
+                const toggleButtonText = enabledStatus ? "禁用" : "启用";
+                const toggleButtonClass = enabledStatus ? "toggle-disable" : "toggle-enable";
                 return `
                   <tr>
                     <td class="col-id">${item.DedeUserID}</td>
+                    <td class="col-enabled">
+                      <div class="toggle-switch ${enabledStatus ? 'enabled' : 'disabled'}" data-dedeuserid="${item.DedeUserID}">
+                        <div class="toggle-slider"></div>
+                      </div>
+                    </td>
                     <td class="col-update-time">${formatTimestamp(item.update_time)}</td>
                     <td class="col-expire-time">${formatTimestamp(item.expire_time)}</td>
                     <td class="col-status">${cookieStatus}</td>
@@ -489,6 +537,14 @@
               button.addEventListener("click", () => {
                 const DedeUserID = button.getAttribute("data-dedeuserid");
                 deleteCookie(DedeUserID);
+              });
+            });
+
+            const toggleSwitches = document.querySelectorAll(".toggle-switch");
+            toggleSwitches.forEach((toggle) => {
+              toggle.addEventListener("click", () => {
+                const DedeUserID = toggle.getAttribute("data-dedeuserid");
+                toggleCookieEnabled(DedeUserID, toggle);
               });
             });
           } catch (error) {
@@ -845,6 +901,37 @@
           } catch (error) {
             console.error("删除失败:", error);
             alert("删除失败，网络错误或服务器异常。");
+          }
+        }
+
+        // 切换 Cookie 启用状态
+        async function toggleCookieEnabled(DedeUserID, toggleElement) {
+          try {
+            const token = localStorage.getItem("api_token");
+            if (!token) {
+              alert("请先登录以提供 API Token。");
+              return;
+            }
+
+            const response = await axios.post("/api/cookie/toggle", 
+              { DedeUserID: DedeUserID },
+              { headers: { token: token } }
+            );
+            
+            const data = response.data;
+            if (data.code === 0) {
+              // 更新开关状态
+              const isEnabled = data.enabled;
+              toggleElement.className = `toggle-switch ${isEnabled ? 'enabled' : 'disabled'}`;
+              
+              const statusText = isEnabled ? "启用" : "禁用";
+              console.log(`用户 ${DedeUserID} 已${statusText}`);
+            } else {
+              alert(`切换失败: ${data.message}`);
+            }
+          } catch (error) {
+            console.error("切换失败:", error);
+            alert("切换失败，网络错误或服务器异常。");
           }
         }
       

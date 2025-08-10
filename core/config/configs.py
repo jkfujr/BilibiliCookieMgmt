@@ -74,7 +74,17 @@ class ServerConfig(BaseConfig):
     
     @property
     def api_token(self) -> str:
-        return self.get("API_TOKEN", "")
+        api_token_config = self.get("API_TOKEN", {"enable": False, "token": ""})
+        if isinstance(api_token_config, dict):
+            return api_token_config.get("token", "")
+        return str(api_token_config)
+    
+    @property
+    def api_token_enabled(self) -> bool:
+        api_token_config = self.get("API_TOKEN", {"enable": False, "token": ""})
+        if isinstance(api_token_config, dict):
+            return api_token_config.get("enable", False)
+        return bool(api_token_config)
 
 
 class AppConfig(BaseConfig):

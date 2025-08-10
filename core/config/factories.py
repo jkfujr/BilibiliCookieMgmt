@@ -42,7 +42,7 @@ class ConfigFactoryBuilder:
         defaults = {
             "HOST": "127.0.0.1",
             "PORT": 8080,
-            "API_TOKEN": "",
+            "API_TOKEN": {"enable": False, "token": ""},
             "COOKIE_CHECK": {"enable": False, "check_intlval": 3600},
             "COOKIE_REFRESH": {"enable": False, "refresh_intlval": 86400},
             "PUSH": {
