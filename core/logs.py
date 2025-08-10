@@ -1,12 +1,9 @@
-# core/logs.py
+import os, logging, shutil
 
-import os
-import logging
-import shutil
 from logging.handlers import TimedRotatingFileHandler
 
 class DiskSpaceCheckHandler(TimedRotatingFileHandler):
-    """检查磁盘空间的日志处理器"""
+    """检查硬盘空间"""
     
     def __init__(self, filename, when='h', interval=1, backupCount=0, encoding=None, 
                  delay=False, utc=False, atTime=None, min_free_space_mb=100):
@@ -20,7 +17,7 @@ class DiskSpaceCheckHandler(TimedRotatingFileHandler):
     
     def emit(self, record):
         """
-        发出日志记录前检查磁盘空间
+        发出日志记录前检查硬盘空间
         """
         try:
             if self.emit_failed:
@@ -34,14 +31,14 @@ class DiskSpaceCheckHandler(TimedRotatingFileHandler):
             if e.errno == 28:
                 if not self.emit_failed:
                     self.emit_failed = True
-                    print(f"警告: 磁盘空间不足，日志写入暂停 - {e}")
+                    print(f"警告: 硬盘空间不足，日志写入暂停 - {e}")
                     console = logging.StreamHandler()
                     console.setLevel(logging.WARNING)
                     formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(message)s')
                     console.setFormatter(formatter)
                     record.levelno = logging.WARNING
                     record.levelname = 'WARNING'
-                    record.msg = f"磁盘空间不足，日志写入暂停: {e}"
+                    record.msg = f"硬盘空间不足，日志写入暂停: {e}"
                     console.emit(record)
             else:
                 print(f"日志写入错误: {e}")
@@ -49,7 +46,7 @@ class DiskSpaceCheckHandler(TimedRotatingFileHandler):
             print(f"日志处理异常: {e}")
     
     def _get_free_space(self):
-        """获取日志文件所在磁盘的可用空间(MB)"""
+        """获取日志文件所在硬盘的可用空间(MB)"""
         try:
             if self.baseFilename:
                 disk = os.path.dirname(os.path.abspath(self.baseFilename))
@@ -62,7 +59,7 @@ class DiskSpaceCheckHandler(TimedRotatingFileHandler):
 def log():
     """
     初始化日志记录器，仅配置文件处理器，记录 DEBUG 及以上级别的日志。
-    增加磁盘空间检查功能。
+    增加硬盘空间检查功能。
     """
     logger = logging.getLogger()
     if logger.hasHandlers():
@@ -91,9 +88,9 @@ def log():
     try:
         free_space_mb = shutil.disk_usage(log_directory).free / (1024 * 1024)
         if free_space_mb < 100:
-            print(f"[警告] 日志目录所在磁盘空间不足: {free_space_mb:.2f}MB")
+            print(f"[警告] 日志目录所在硬盘空间不足: {free_space_mb:.2f}MB")
     except Exception as e:
-        print(f"[警告] 检查磁盘空间失败: {e}")
+        print(f"[警告] 检查硬盘空间失败: {e}")
 
     file_handler = DiskSpaceCheckHandler(
         log_file_path,
