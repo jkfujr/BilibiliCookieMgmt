@@ -25,8 +25,8 @@ let cookie = '';
 const httpErrorRepeat = 3;
 
 const bilibiliCookieMgmt = {
-    enable: false, // 是否启用cookie管理
-    api_url: 'http://127.0.0.1:18000', // cookie管理API地址
+    enable: true, // 是否启用cookie管理
+    api_url: 'http://10.0.0.101:18000', // cookie管理API地址
     token: '1145141919810', // cookie管理API token
 }
 
@@ -123,7 +123,6 @@ class BilibiliCookieMgmt {
     enable = false;
 
     token = '';
-    cookie_list = [];
     cookies = '';
 
     #api_url = '';
@@ -133,7 +132,7 @@ class BilibiliCookieMgmt {
         'token': '',
     }
 
-    #api_path_cookie_get = '/api/cookie';
+    #api_path_cookie_random = '/api/cookie/random';
 
     constructor(params) {
         this.#check_api_url(params?.api_url);
@@ -150,51 +149,36 @@ class BilibiliCookieMgmt {
     }
 
     #run() {
-        this.#get_cookies_list();
-
-        if (!this.cookie_list.length) {
-            console.warn('cookie列表为空，无法获取有效cookie');
-            console.debug(JSON.stringify(this.cookie_list));
-            return;
+        try {
+            this.#get_random_cookie();
+        } catch (e) {
+            console.warn('Cookie管理API请求失败，使用默认cookie：' + e.toString());
+            this.cookies = cookie;
         }
-
-        const cookie_list = this.cookie_list[
-            Math.floor(Math.random() * this.cookie_list.length)
-        ];
-
-        this.#get_cookies(cookie_list);
     }
 
-    #get_cookies_list() {
-        const cookie_list = httpReq({
-            url: `${this.#api_url}${this.#api_path_cookie_get}`,
+    #get_random_cookie() {
+        const response = httpReq({
+            url: `${this.#api_url}${this.#api_path_cookie_random}?type=sim`,
             method: 'GET',
             headers: this.#api_headers
         }, httpErrorRepeat);
 
-        if (!cookie_list.ok)
-            throw new Error(`获取cookie列表失败，status: ${cookie_list.status}, message: ${String(cookie_list.body)}`);
+        if (!response.ok)
+            throw new Error(`获取随机cookie失败，status: ${response.status}, message: ${String(response.body)}`);
 
-        const body = JSON.parse(cookie_list.body);
-        this.#check_cookie_list(body);
+        const body = JSON.parse(response.body);
+        this.#check_random_cookie_response(body);
 
-        this.cookie_list = body.filter(cookie => cookie.cookie_valid);
+        this.cookies = body.cookie;
     }
 
-    #get_cookies({ DedeUserID }) {
-        const data = httpReq({
-            url: `${this.#api_url}${this.#api_path_cookie_get}?${queryConvert_toStr({ DedeUserID })}`,
-            method: 'GET',
-            headers: this.#api_headers
-        }, httpErrorRepeat);
+    #check_random_cookie_response(data) {
+        if (data?.code !== 0)
+            throw new Error(`获取随机cookie失败，${data?.message || data?.detail}`);
 
-        if (!data?.ok)
-            throw new Error(`获取cookie失败，status: ${data.status}, message: ${String(data.body)}`);
-
-        const body = JSON.parse(data.body);
-        this.#check_cookies_data(body);
-
-        this.cookies = body.cookie_info.cookies.map(cookie => `${cookie.name}=${cookie.value}`).join('; ');
+        if (typeof data?.cookie !== 'string')
+            throw new TypeError(`cookie 字段必须是字符串，当前类型为${typeof data?.cookie}`);
     }
 
     #check_api_url(api_url) {
@@ -209,34 +193,5 @@ class BilibiliCookieMgmt {
     #check_api_token(token) {
         if (!token)
             throw new Error('token 不能为空');
-    }
-
-    #check_cookie_list(data) {
-        if (!Array.isArray(data))
-            throw new TypeError('data 必须是数组');
-
-        for (const cookie of data) {
-            if (typeof cookie?.DedeUserID !== 'string')
-                throw new TypeError(`data.DedeUserID 字段必须是字符串，当前类型为${typeof cookie?.DedeUserID}`);
-
-            if (typeof cookie?.cookie_valid !== 'boolean')
-                throw new TypeError(`data.cookie_valid 字段必须是布尔值，当前类型为${typeof cookie?.cookie_valid}`);
-        }
-    }
-
-    #check_cookies_data(data) {
-        if (data?.code !== 0 && !data?.cookie_info)
-            throw new Error(`获取cookie失败，${data?.message || data?.detail}`);
-
-        if (!Array.isArray(data?.cookie_info?.cookies))
-            throw new TypeError('data.cookie_info.cookies 必须是数组');
-
-        for (const cookie of data.cookie_info.cookies) {
-            if (typeof cookie?.name !== 'string')
-                throw new TypeError(`cookie.name 字段必须是字符串，当前类型为${typeof cookie?.name}`);
-
-            if (typeof cookie?.value !== 'string')
-                throw new TypeError(`cookie.value 字段必须是字符串，当前类型为${typeof cookie?.value}`);
-        }
     }
 }
