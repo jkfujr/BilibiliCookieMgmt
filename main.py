@@ -8,9 +8,14 @@ from core.scheduler import run as scheduler_run
 from core.routes.auth import router as auth_router
 from core.routes.cookie import router as cookie_router
 from core.routes.main import router as main_router
+from core.cookie.cache import get_cache_manager
 
 @asynccontextmanager
 async def run(app: FastAPI):
+    # 缓存
+    cache_manager = get_cache_manager()
+    cache_manager.load_all_cookies()
+    
     # 启动调度
     async with scheduler_run(app):
         yield

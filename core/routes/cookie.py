@@ -106,54 +106,26 @@ async def get_cookies(DedeUserID: str = Query(None), token: str = Header(None)):
 # 随机返回有效cookie
 @router.get("/api/cookie/random")
 async def get_random_cookie(token: str = Header(None), type: str = Query(None)):
-    from core.config import get_config_manager
-    config_manager = get_config_manager()
-    app_config = config_manager.config
-    COOKIE_FOLDER = app_config.cookie.folder
-
+    from core.cookie.cache import get_cache_manager
     
     await verify_api_token(token)
-    valid_cookies = []
-    if os.path.exists(COOKIE_FOLDER):
-        for filename in os.listdir(COOKIE_FOLDER):
-            if filename.endswith(".json"):
-                file_path = os.path.join(COOKIE_FOLDER, filename)
-                try:
-                    with open(file_path, "r", encoding="utf-8") as file:
-                        file_content = file.read().strip()
-                        if not file_content:
-                            continue
-                            
-                        cookie_data = json.loads(file_content)
-                        DedeUserID = filename.replace(".json", "")
-                        
-                        if "_cookiemgmt" in cookie_data:
-                            is_valid = cookie_data["_cookiemgmt"].get("cookie_valid", False)
-                            is_enabled = cookie_data["_cookiemgmt"].get("enabled", True)
-                            if is_valid is True and is_enabled is not False:
-                                valid_cookies.append(cookie_data)
-                        else:
-                            logger.warning(f"[随机] 文件 {filename} 使用旧格式，跳过")
-                except (json.JSONDecodeError, KeyError) as e:
-                    logger.error(f"[随机] 解析文件 {filename} 时出错: {e}")
-                    continue
-    if not valid_cookies:
-        raise HTTPException(status_code=404, detail="无可用的有效 Cookie")
     
-    chosen_cookie = random.choice(valid_cookies)
+    # 使用缓存管理器获取随机cookie
+    cache_manager = get_cache_manager()
+    chosen_cookie = cache_manager.get_random_cookie()
+    
+    if not chosen_cookie:
+        raise HTTPException(status_code=404, detail="无可用的有效 Cookie")
     
     if type == "sim":
         try:
-            cookies = chosen_cookie["cookie_info"]["cookies"]
-            cookie_dict = {cookie["name"]: cookie["value"] for cookie in cookies}
-            required_keys = ["DedeUserID", "DedeUserID__ckMd5", "SESSDATA", "bili_jct", "buvid3", "buvid4"]
-            cookie_string = "".join([f"{key}={cookie_dict.get(key, '')};" for key in required_keys])
+            cookie_string = chosen_cookie.to_simple_format()
             return JSONResponse(content={"code": 0, "message": "获取成功", "cookie": cookie_string})
-        except KeyError as e:
-            logger.error(f"[随机] 生成标准格式Cookie字符串失败: {e}")
+        except Exception as e:
+            logger.error(f"[随机] 生成简化格式Cookie字符串失败: {e}")
             raise HTTPException(status_code=500, detail="生成Cookie字符串失败")
 
-    return JSONResponse(content=chosen_cookie)
+    return JSONResponse(content=chosen_cookie.cookie_data)
 
 
 # 检查Cookie

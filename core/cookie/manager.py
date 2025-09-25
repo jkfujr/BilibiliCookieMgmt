@@ -3,6 +3,7 @@ import os, json, time, asyncio, aiohttp
 from core.logs import log, log_print
 from core.notifications.gotify import ez_push_gotify
 from core.auth import USER_AGENT, tvsign
+from .cache import get_cache_manager
 
 logger = log()
 
@@ -86,6 +87,9 @@ def save_cookie(login_data):
     # 检查文件是否写入且不为空
     if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
         logger.info(f"[保存] 用户 {DedeUserID} 的 Cookie 保存成功")
+        # 更新缓存
+        cache_manager = get_cache_manager()
+        cache_manager.update_cookie(DedeUserID)
     else:
         error_msg = f"[保存] 用户 {DedeUserID} 的 Cookie 文件保存失败或为空"
         log_print(error_msg, "ERROR")
@@ -160,6 +164,10 @@ async def refresh_cookie(DedeUserID):
         file_path = get_cookie_file_path(DedeUserID)
         with open(file_path, "w", encoding="utf-8") as f:
             json.dump(save_info, f, ensure_ascii=False, indent=4)
+
+        # 更新缓存
+        cache_manager = get_cache_manager()
+        cache_manager.update_cookie(DedeUserID)
 
         expire_time_str = time.strftime(
             "%Y-%m-%d %H:%M:%S", time.localtime(expire_timestamp / 1000)

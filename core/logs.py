@@ -50,11 +50,40 @@ class DiskSpaceCheckHandler(TimedRotatingFileHandler):
         try:
             if self.baseFilename:
                 disk = os.path.dirname(os.path.abspath(self.baseFilename))
-                free_bytes = shutil.disk_usage(disk).free
-                return free_bytes / (1024 * 1024)
+                return self._get_disk_usage_mb(disk)
             return 0
         except Exception:
             return 0
+    
+    def _get_disk_usage_mb(self, path):
+        """获取指定路径的硬盘可用空间(MB)，兼容 PyPy"""
+        return _get_disk_usage_mb(path)
+
+def _get_disk_usage_mb(path):
+    """获取指定路径的硬盘可用空间(MB)，兼容 PyPy"""
+    try:
+        import platform
+        system = platform.system().lower()
+        
+        if system == 'windows':
+            import ctypes
+            free_bytes = ctypes.c_ulonglong(0)
+            ctypes.windll.kernel32.GetDiskFreeSpaceExW(
+                ctypes.c_wchar_p(path),
+                ctypes.pointer(free_bytes),
+                None,
+                None
+            )
+            return free_bytes.value / (1024 * 1024)
+        else:
+            # Unix/Linux 系统使用 statvfs
+            import os
+            statvfs = os.statvfs(path)
+            free_bytes = statvfs.f_frsize * statvfs.f_bavail
+            return free_bytes / (1024 * 1024)
+    except Exception:
+        # 最后的回退：返回一个安全的默认值
+        return 1000  # 假设有 1GB 可用空间
 
 def log():
     """
@@ -86,7 +115,8 @@ def log():
     log_file_path = os.path.join(log_directory, default_log_file_name)
 
     try:
-        free_space_mb = shutil.disk_usage(log_directory).free / (1024 * 1024)
+        # 使用兼容的硬盘空间检查方法
+        free_space_mb = _get_disk_usage_mb(log_directory)
         if free_space_mb < 100:
             print(f"[警告] 日志目录所在硬盘空间不足: {free_space_mb:.2f}MB")
     except Exception as e:
