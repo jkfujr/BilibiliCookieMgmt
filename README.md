@@ -36,6 +36,6 @@ Rec-NIC 今天也是咕咕咕的一天 108737089
     (录播姬非官方闲聊群但是官方)
 
 # 致谢
-> 该仓库的登录及刷新功能主要参考了 @cibimo 的 bilibiliLogin 项目，感谢!
+> 该仓库的登录及刷新功能主要参考了 @cibimo 的 bilibiliLogin 项目, 感谢!
 > 
 > bilibiliLogin https://github.com/cibimo/bilibiliLogin

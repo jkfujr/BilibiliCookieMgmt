@@ -1,0 +1,944 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>比例比例COOKIE管理</title>
+    <style>
+    /* 全局 */
+    body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+    }
+
+    *, *::before, *::after {
+      box-sizing: border-box;
+    }
+
+    /* 左侧边栏 */
+    #sidebar {
+      width: 200px;
+      position: fixed;
+      top: 0;
+      left: 0;
+      height: 100%;
+      background-color: #f0f0f0;
+      padding-top: 20px;
+    }
+
+    #sidebar button {
+      display: block;
+      width: 160px;
+      margin: 10px auto;
+      padding: 10px;
+      font-size: 16px;
+      cursor: pointer;
+    }
+
+    #sidebar hr {
+      width: 80%;
+      margin: 20px auto;
+      border: none;
+      border-top: 1px solid #ccc;
+    }
+
+    /* 主内容区域 */
+    #container {
+      margin-left: 200px;
+      margin-right: 20px;
+      margin-top: 20px;
+      text-align: center;
+    }
+
+    /* 表格 */
+    table {
+      display: inline-table;
+      max-width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 20px;
+    }
+
+    table, th, td {
+      border: 1px solid black;
+    }
+
+    th, td {
+      padding: 8px;
+      text-align: center;
+      vertical-align: middle;
+      white-space: normal;
+      word-break: break-word;
+    }
+
+    th.col-status,
+    td.col-status,
+    th.col-check-time,
+    td.col-check-time {
+      white-space: normal;
+      word-break: break-all;
+    }
+
+    th.col-actions,
+    td.col-actions {
+      white-space: nowrap;
+    }
+
+    /* 扫码按钮 */
+    #startButton {
+      padding: 10px 20px;
+      font-size: 16px;
+      cursor: pointer;
+      margin-bottom: 20px;
+      display: block;
+      margin-left: auto;
+      margin-right: auto;
+    }
+
+    /* 通用弹窗 */
+    .modal {
+      display: none;
+      position: fixed;
+      width: 360px;
+      height: 400px;
+      min-width: 300px;
+      min-height: 200px;
+      padding: 0;
+      background: white;
+      border: 2px solid #ccc;
+      box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+      z-index: 1000;
+      overflow: hidden;
+      resize: both;
+    }
+
+    /* 弹窗标题 */
+    .modal-header {
+      height: 30px;
+      cursor: move;
+      padding: 5px;
+      background: #f0f0f0;
+      border-bottom: 1px solid #ddd;
+    }
+
+    /* 弹窗关闭按钮 */
+    .modal-close-button {
+      float: right;
+      cursor: pointer;
+    }
+
+    /* 弹窗内容 */
+    .modal-content {
+      margin-top: 0;
+      height: calc(100% - 40px);
+      overflow: auto;
+      padding: 10px;
+      box-sizing: border-box;
+    }
+    
+
+    /* 分页标签 */
+    #tabContainer {
+      display: flex;
+      border-bottom: 1px solid #ddd;
+    }
+
+    #tabContainer div {
+      flex: 1;
+      padding: 10px;
+      cursor: pointer;
+      text-align: center;
+    }
+
+    #tabContainer div.active {
+      background: #f0f0f0;
+    }
+
+    /* 分页 */
+    #contentContainer {
+      padding: 0;
+      height: calc(100% - 70px);
+      overflow: hidden;
+    }
+
+    /* 文本框 */
+    textarea {
+      width: 100%;
+      height: 100%;
+      resize: none;
+      outline: none;
+      font-family: monospace;
+      margin: 0;
+      padding: 10px;
+      border: none;
+      font-size: 14px;
+      line-height: 1.5;
+      box-sizing: border-box;
+    }
+
+    textarea[readonly] {
+      background-color: #f9f9f9;
+    }
+
+    #completeContent {
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+
+    /* 二维码 */
+    #qrcode {
+      width: 100%;
+      height: 100%;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+
+    #qrcode canvas, #qrcode img {
+      max-width: 100%;
+      max-height: 100%;
+      width: auto;
+      height: auto;
+    }
+
+    .qr-modal-content {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+
+
+    /* 按钮 */
+    .modal-content button {
+      display: block;
+      width: 100%;
+      padding: 10px;
+      font-size: 16px;
+      cursor: pointer;
+      margin-top: 10px;
+    }
+
+    /* 切换开关样式 */
+    .toggle-switch {
+      position: relative;
+      width: 50px;
+      height: 24px;
+      background-color: #ccc;
+      border-radius: 12px;
+      cursor: pointer;
+      transition: background-color 0.3s;
+      display: inline-block;
+    }
+
+    .toggle-switch.enabled {
+      background-color: #4CAF50;
+    }
+
+    .toggle-switch.disabled {
+      background-color: #ccc;
+    }
+
+    .toggle-slider {
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      width: 20px;
+      height: 20px;
+      background-color: white;
+      border-radius: 50%;
+      transition: transform 0.3s;
+    }
+
+    .toggle-switch.enabled .toggle-slider {
+      transform: translateX(26px);
+    }
+
+    .toggle-switch.disabled .toggle-slider {
+      transform: translateX(0);
+    }
+
+    </style>
+  </head>
+  <body>
+
+  <!-- 通用弹窗 -->
+  <div id="modal" class="modal">
+    <div class="modal-header">
+      <span id="modalTitle">标题</span>
+      <span class="modal-close-button" id="closeModal">X</span>
+    </div>
+    <div class="modal-content" id="modalContent">
+      <!-- 动态内容 -->
+    </div>
+  </div>
+
+    <!-- 左侧边栏 -->
+    <div id="sidebar">
+      <button id="loginButton">登录</button>
+      <hr>
+      <button id="checkAllCookiesButton">检查所有Cookie</button>
+      <button id="refreshAllCookiesButton">刷新所有Cookie</button>
+      <hr>
+      <button id="testCookieButton">测试Cookie</button>
+    </div>
+
+    <!-- 内容区域 -->
+    <div id="container">
+      <table id="accountTable">
+        <thead>
+          <tr>
+            <th class="col-id">用户ID</th>
+            <th class="col-enabled">是否启用</th>
+            <th class="col-update-time">更新时间</th>
+            <th class="col-expire-time">过期时间</th>
+            <th class="col-status">登录状态</th>
+            <th class="col-check-time">检查时间</th>
+            <th class="col-actions">操作</th>
+          </tr>
+        </thead>
+        <tbody id="accountStatus">
+          <!-- 动态生成 -->
+        </tbody>
+      </table>
+      <div id="buttonContainer">
+        <button id="startButton">开始扫码</button>
+      </div>
+    </div>
+
+
+    <script src="/static/js/axios.min.js"></script>
+    <script src="/static/js/qrcode.min.js"></script>
+    <script>
+      document.addEventListener("DOMContentLoaded", () => {
+        const loginButton = document.getElementById("loginButton");
+        const checkAllCookiesButton = document.getElementById("checkAllCookiesButton");
+        const refreshAllCookiesButton = document.getElementById("refreshAllCookiesButton");
+        const testCookieButton = document.getElementById("testCookieButton");
+        const startButton = document.getElementById("startButton");
+        const accountStatus = document.getElementById("accountStatus");
+        let pollingInterval;
+      
+        // 检查登录
+        function checkLogin() {
+          const token = localStorage.getItem("api_token");
+          if (token) {
+            loginButton.textContent = "已登录";
+            loginButton.disabled = true;
+          } else {
+            loginButton.textContent = "登录";
+            loginButton.disabled = false;
+          }
+        }
+      
+        // 初始化弹窗
+        initModal();
+      
+        // 初始化弹窗相关函数
+        function initModal() {
+          const modal = document.getElementById("modal");
+          const modalHeader = modal.querySelector(".modal-header");
+          const closeModalButton = document.getElementById("closeModal");
+      
+          // 关闭弹窗
+          closeModalButton.addEventListener("click", closeModal);
+      
+          // 弹窗拖动功能
+          modalHeader.addEventListener("mousedown", (e) => {
+            if (e.target.id === "closeModal") return;
+            let offsetX = e.clientX - modal.offsetLeft;
+            let offsetY = e.clientY - modal.offsetTop;
+      
+            function mouseMoveHandler(e) {
+              modal.style.left = `${e.clientX - offsetX}px`;
+              modal.style.top = `${e.clientY - offsetY}px`;
+            }
+      
+            function reset() {
+              document.removeEventListener("mousemove", mouseMoveHandler);
+              document.removeEventListener("mouseup", reset);
+            }
+      
+            document.addEventListener("mousemove", mouseMoveHandler);
+            document.addEventListener("mouseup", reset);
+          });
+        }
+      
+        function openModal(title, contentHTML, modalClass = '') {
+          const modal = document.getElementById("modal");
+          const modalTitle = document.getElementById("modalTitle");
+          const modalContent = document.getElementById("modalContent");
+
+          modalTitle.textContent = title;
+          modalContent.innerHTML = contentHTML;
+          modalContent.className = 'modal-content ' + modalClass;
+
+          modal.style.display = "block";
+          centerModal();
+        }
+
+        function closeModal() {
+          const modal = document.getElementById("modal");
+          modal.style.display = "none";
+      
+          // 清理轮询
+          if (typeof pollingInterval !== 'undefined' && pollingInterval) {
+            clearInterval(pollingInterval);
+            pollingInterval = null;
+          }
+        }
+      
+        function centerModal() {
+          const modal = document.getElementById("modal");
+          const rect = modal.getBoundingClientRect();
+          const windowWidth = window.innerWidth;
+          const windowHeight = window.innerHeight;
+          const left = (windowWidth - rect.width) / 2;
+          const top = (windowHeight - rect.height) / 2;
+          modal.style.left = `${left}px`;
+          modal.style.top = `${top}px`;
+        }
+      
+        // 登录按钮
+        loginButton.addEventListener("click", () => {
+          const token = prompt("请输入 API Token:");
+          if (token) {
+            localStorage.setItem("api_token", token);
+            alert("Token 已保存！");
+            checkLogin();
+          }
+        });
+      
+        // 检查所有 Cookie
+        checkAllCookiesButton.addEventListener("click", () => {
+          checkAllCookies();
+        });
+      
+        // 刷新所有 Cookie
+        refreshAllCookiesButton.addEventListener("click", () => {
+          refreshAllCookies();
+        });
+      
+        // 测试Cookie
+        testCookieButton.addEventListener("click", () => {
+          const token = localStorage.getItem("api_token");
+          if (!token) {
+            alert("请先登录以提供 API Token。");
+            return;
+          }
+
+          const contentHTML = `
+            <textarea id="testCookieTextarea" placeholder="请输入Cookie" style="width: 100%; height: 70%;"></textarea>
+            <button id="testCookieSubmitButton" style="width: 100%; padding: 10px; font-size: 16px;">测试</button>
+          `;
+          openModal("测试 Cookie", contentHTML);
+
+          const testCookieSubmitButton = document.getElementById("testCookieSubmitButton");
+          const testCookieTextarea = document.getElementById("testCookieTextarea");
+
+          testCookieSubmitButton.addEventListener("click", async () => {
+            const cookieText = testCookieTextarea.value.trim();
+            if (!cookieText) {
+              alert("请输入Cookie！");
+              return;
+            }
+
+            try {
+              const response = await axios.post(
+                "/api/cookie/test",
+                { cookie: cookieText },
+                { headers: { token: token } }
+              );
+
+              const data = response.data;
+
+              if (data.code === 0) {
+                alert("Cookie有效！");
+              } else {
+                alert(`错误: ${data.message}`);
+              }
+            } catch (error) {
+              console.error("测试失败: ", error);
+              alert("测试失败, 网络错误或服务器异常。");
+            }
+          });
+        });
+
+      
+        // 加载显示账号
+        async function loadAccountStatus() {
+          try {
+            const response = await axios.get("/api/cookie");
+            const data = response.data;
+            accountStatus.innerHTML = data
+              .map((item) => {
+                const checkTime = item.check_time
+                  ? formatTimestamp(item.check_time)
+                  : "未检查";
+                const cookieStatus =
+                  item.cookie_valid === true
+                    ? "有效"
+                    : item.cookie_valid === false
+                    ? "无效"
+                    : "未知";
+                const enabledStatus = item.enabled !== false;
+                const toggleButtonText = enabledStatus ? "禁用" : "启用";
+                const toggleButtonClass = enabledStatus ? "toggle-disable" : "toggle-enable";
+                return `
+                  <tr>
+                    <td class="col-id">${item.DedeUserID}</td>
+                    <td class="col-enabled">
+                      <div class="toggle-switch ${enabledStatus ? 'enabled' : 'disabled'}" data-dedeuserid="${item.DedeUserID}">
+                        <div class="toggle-slider"></div>
+                      </div>
+                    </td>
+                    <td class="col-update-time">${formatTimestamp(item.update_time)}</td>
+                    <td class="col-expire-time">${formatTimestamp(item.expire_time)}</td>
+                    <td class="col-status">${cookieStatus}</td>
+                    <td class="col-check-time">${checkTime}</td>
+                    <td class="col-actions">
+                      <button class="viewCookieButton" data-dedeuserid="${item.DedeUserID}">查看</button>
+                      |
+                      <button class="checkButton" data-dedeuserid="${item.DedeUserID}">检查</button>
+                      |
+                      <button class="refreshButton" data-dedeuserid="${item.DedeUserID}">刷新</button>
+                      |
+                      <button class="deleteButton" data-dedeuserid="${item.DedeUserID}">删除</button>
+                    </td>
+                  </tr>
+                `;
+              })
+              .join("");
+      
+            const refreshButtons = document.querySelectorAll(".refreshButton");
+            refreshButtons.forEach((button) => {
+              button.addEventListener("click", () => {
+                const DedeUserID = button.getAttribute("data-dedeuserid");
+                refreshCookie(DedeUserID);
+              });
+            });
+      
+            const checkButtons = document.querySelectorAll(".checkButton");
+            checkButtons.forEach((button) => {
+              button.addEventListener("click", () => {
+                const DedeUserID = button.getAttribute("data-dedeuserid");
+                checkCookie(DedeUserID);
+              });
+            });
+      
+            const viewCookieButtons = document.querySelectorAll(".viewCookieButton");
+            viewCookieButtons.forEach((button) => {
+              button.addEventListener("click", () => {
+                const DedeUserID = button.getAttribute("data-dedeuserid");
+                viewCookie(DedeUserID);
+              });
+            });
+
+            const deleteButtons = document.querySelectorAll(".deleteButton");
+            deleteButtons.forEach((button) => {
+              button.addEventListener("click", () => {
+                const DedeUserID = button.getAttribute("data-dedeuserid");
+                deleteCookie(DedeUserID);
+              });
+            });
+
+            const toggleSwitches = document.querySelectorAll(".toggle-switch");
+            toggleSwitches.forEach((toggle) => {
+              toggle.addEventListener("click", () => {
+                const DedeUserID = toggle.getAttribute("data-dedeuserid");
+                toggleCookieEnabled(DedeUserID, toggle);
+              });
+            });
+          } catch (error) {
+            console.error("加载账号状态失败:", error);
+          }
+        }
+      
+        // 时间戳转格式
+        function formatTimestamp(timestamp) {
+          const date = new Date(parseInt(timestamp));
+          return `${date.getFullYear()}-${padZero(
+            date.getMonth() + 1
+          )}-${padZero(date.getDate())} ${padZero(date.getHours())}:${padZero(
+            date.getMinutes()
+          )}:${padZero(date.getSeconds())}`;
+        }
+      
+        // 数字补零
+        function padZero(num) {
+          return num < 10 ? "0" + num : num;
+        }
+      
+        async function getLoginAuthCodeAndUrl() {
+          const token = localStorage.getItem("api_token");
+          if (!token) {
+            alert("请先登录以提供 API Token。");
+            throw new Error("未登录");
+          }
+          try {
+            const response = await axios.get(
+              "/api/passport-login/web/qrcode/generate",
+              {
+                headers: { token: token },
+              }
+            );
+            const data = response.data;
+            return {
+              auth_code: data.data.auth_code,
+              url: data.data.url,
+            };
+          } catch (error) {
+            if (error.response && error.response.status === 401) {
+              alert("Token 无效或已过期, 请重新登录。");
+              localStorage.removeItem("api_token");
+              checkLogin();
+            }
+            throw error;
+          }
+        }
+      
+        // 轮询检查登录状态
+        async function verifyLogin(auth_code) {
+          const token = localStorage.getItem("api_token");
+          if (!token) {
+            alert("请先登录以提供 API Token。");
+            clearInterval(pollingInterval);
+            closeModal();
+            throw new Error("未登录");
+          }
+          try {
+            const response = await axios.get("/api/passport-login/web/qrcode/poll", {
+              params: { auth_code: auth_code },
+              headers: { token: token },
+            });
+            const data = response.data;
+      
+            if (data.code === 0) {
+              alert("扫码成功, Cookie已获取！");
+              clearInterval(pollingInterval);
+              pollingInterval = null;
+              closeModal();
+              loadAccountStatus();
+            } else if (data.code === 86038) {
+              clearInterval(pollingInterval);
+              pollingInterval = null;
+              const qrcodeElement = document.getElementById("qrcode");
+              if (qrcodeElement) {
+                qrcodeElement.innerHTML = "二维码已失效, 请重新扫码。";
+                qrcodeElement.style.filter = "grayscale(100%)";
+              }
+            } else if (data.code === 86090) {
+              // 等待扫码, 什么都不做
+            } else {
+              console.error("未知错误:", data.message);
+            }
+          } catch (error) {
+            if (error.response && error.response.status === 401) {
+              alert("Token 无效或已过期, 请重新登录。");
+              localStorage.removeItem("api_token");
+              checkLogin();
+              clearInterval(pollingInterval);
+              pollingInterval = null;
+              closeModal();
+            } else {
+              console.error("轮询失败:", error);
+            }
+          }
+        }
+      
+        // 扫码按钮
+        startButton.addEventListener("click", async () => {
+          const token = localStorage.getItem("api_token");
+          if (!token) {
+            alert("请先登录以提供 API Token。");
+            return;
+          }
+          try {
+            const { auth_code, url } = await getLoginAuthCodeAndUrl();
+      
+            const contentHTML = `
+            <div id="qrcode">二维码加载中...</div>
+          `;
+            openModal("扫码登录", contentHTML, 'qr-modal-content');
+      
+            const qrcodeElement = document.getElementById("qrcode");
+            qrcodeElement.innerHTML = "";
+            qrcodeElement.style.filter = "";
+            new QRCode(qrcodeElement, url);
+      
+            pollingInterval = setInterval(() => verifyLogin(auth_code), 3000);
+          } catch (error) {
+            const qrcodeElement = document.getElementById("qrcode");
+            qrcodeElement.textContent = "获取二维码失败, 请刷新页面重试。";
+          }
+        });
+      
+        // 刷新单个 Cookie
+        async function refreshCookie(DedeUserID) {
+          try {
+            const token = localStorage.getItem("api_token");
+            if (!token) {
+              alert("请先登录以提供 API Token。");
+              return;
+            }
+
+            const confirmRefresh = confirm(
+              `确定要刷新用户 ${DedeUserID} 的 Cookie 吗？`
+            );
+            if (!confirmRefresh) return;
+      
+            const response = await axios.get(`/api/cookie/refresh`, {
+              params: { DedeUserID: DedeUserID },
+              headers: { token: token },
+            });
+            const data = response.data;
+            if (data.code === 0) {
+              const expireTime = formatTimestamp(data.expire_time);
+              alert(`刷新成功！\n有效期至: ${expireTime}`);
+              loadAccountStatus();
+            } else {
+              alert(`刷新失败: ${data.message}`);
+            }
+          } catch (error) {
+            console.error("刷新失败:", error);
+            alert("刷新失败, 网络错误或服务器异常。");
+          }
+        }
+      
+        // 检查单个 Cookie
+        async function checkCookie(DedeUserID) {
+          try {
+            const token = localStorage.getItem("api_token");
+            if (!token) {
+              alert("请先登录以提供 API Token。");
+              return;
+            }
+
+            const confirmCheck = confirm(
+              `确定要检查用户 ${DedeUserID} 的 Cookie 状态吗？`
+            );
+            if (!confirmCheck) return;
+      
+
+      
+            const response = await axios.get(`/api/cookie/check`, {
+              params: { DedeUserID: DedeUserID },
+              headers: { token: token },
+            });
+            const data = response.data;
+            if (data.code === 0) {
+              alert(`Cookie 有效！`);
+            } else {
+              alert(`Cookie 无效: ${data.message}`);
+            }
+            loadAccountStatus();
+          } catch (error) {
+            console.error("检查失败:", error);
+            alert("检查失败, 网络错误或服务器异常。");
+          }
+        }
+      
+        // 查看 Cookie
+        async function viewCookie(DedeUserID) {
+          try {
+            const token = localStorage.getItem("api_token");
+            if (!token) {
+              alert("请先登录以提供 API Token。");
+              return;
+            }
+      
+            const response = await axios.get(`/api/cookie`, {
+              params: { DedeUserID: DedeUserID },
+              headers: { token: token },
+            });
+            const cookieData = response.data;
+            const cookies = cookieData.cookie_info.cookies;
+            const cookieDict = {};
+            cookies.forEach((cookie) => {
+              cookieDict[cookie.name] = cookie.value;
+            });
+            const requiredKeys = [
+              "DedeUserID",
+              "DedeUserID__ckMd5",
+              "SESSDATA",
+              "bili_jct",
+              "buvid3",
+              "buvid4",
+            ];
+            const cookieString =
+              requiredKeys
+                .map((key) => `${key}=${cookieDict[key] || ""}`)
+                .join(";") + ";";
+      
+            showCookiePopup(cookieString, cookieData);
+          } catch (error) {
+            console.error("获取 Cookie 信息失败:", error);
+            alert("获取 Cookie 信息失败, 网络错误或服务器异常。");
+          }
+        }
+      
+        function showCookiePopup(cookieString, cookieData) {
+          const contentHTML = `
+            <div id="tabContainer">
+              <div id="tabSimple" class="active">标准</div>
+              <div id="tabComplete">原始</div>
+            </div>
+            <div id="contentContainer" style="height: calc(100% - 40px);">
+              <textarea id="simpleContent" readonly style="width: 100%; height: 100%;"></textarea>
+              <textarea id="completeContent" readonly style="width: 100%; height: 100%; display: none;"></textarea>
+            </div>
+          `;
+          openModal("查看 Cookie", contentHTML);
+      
+          const tabSimple = document.getElementById("tabSimple");
+          const tabComplete = document.getElementById("tabComplete");
+          const simpleContent = document.getElementById("simpleContent");
+          const completeContent = document.getElementById("completeContent");
+      
+          simpleContent.value = cookieString;
+          completeContent.value = JSON.stringify(cookieData, null, 4);
+      
+          tabSimple.addEventListener("click", () => {
+            tabSimple.classList.add("active");
+            tabComplete.classList.remove("active");
+            simpleContent.style.display = "block";
+            completeContent.style.display = "none";
+          });
+      
+          tabComplete.addEventListener("click", () => {
+            tabSimple.classList.remove("active");
+            tabComplete.classList.add("active");
+            simpleContent.style.display = "none";
+            completeContent.style.display = "block";
+          });
+      
+          tabSimple.classList.add("active");
+          tabComplete.classList.remove("active");
+          simpleContent.style.display = "block";
+          completeContent.style.display = "none";
+        }
+      
+        // 检查所有 Cookie
+        async function checkAllCookies() {
+          try {
+            const token = localStorage.getItem("api_token");
+            if (!token) {
+              alert("请先登录以提供 API Token。");
+              return;
+            }
+
+            const confirmCheck = confirm("确定要检查所有用户的 Cookie 状态吗？");
+            if (!confirmCheck) return;
+      
+            const response = await axios.get("/api/cookie/check_all", {
+              headers: { token: token },
+            });
+            const data = response.data;
+            if (data.code === 0) {
+              alert("所有Cookie已检查！");
+              loadAccountStatus();
+            } else {
+              alert(`检查失败: ${data.message}`);
+            }
+          } catch (error) {
+            console.error("检查所有Cookie失败:", error);
+            alert("检查失败, 网络错误或服务器异常。");
+          }
+        }
+      
+        // 刷新所有 Cookie
+        async function refreshAllCookies() {
+          try {
+            const token = localStorage.getItem("api_token");
+            if (!token) {
+              alert("请先登录以提供 API Token。");
+              return;
+            }
+
+            const confirmRefresh = confirm("确定要刷新所有需要刷新的 Cookie 吗？");
+            if (!confirmRefresh) return;
+      
+            const response = await axios.get("/api/cookie/refresh_all", {
+              headers: { token: token },
+            });
+            const data = response.data;
+            if (data.code === 0) {
+              alert("需要刷新过期的Cookie已刷新！");
+              loadAccountStatus();
+            } else {
+              alert(`刷新失败: ${data.message}`);
+            }
+          } catch (error) {
+            console.error("刷新所有Cookie失败:", error);
+            alert("刷新失败, 网络错误或服务器异常。");
+          }
+        }
+      
+        // 删除 Cookie
+        async function deleteCookie(DedeUserID) {
+          try {
+            const token = localStorage.getItem("api_token");
+            if (!token) {
+              alert("请先登录以提供 API Token。");
+              return;
+            }
+
+            const confirmDelete = confirm(
+              `确定要删除用户 ${DedeUserID} 的 Cookie 吗？此操作不可恢复！`
+            );
+            if (!confirmDelete) return;
+
+            const response = await axios.delete(`/api/cookie/delete`, {
+              params: { DedeUserID: DedeUserID },
+              headers: { token: token },
+            });
+            
+            const data = response.data;
+            if (data.code === 0) {
+              alert("Cookie 删除成功！");
+              loadAccountStatus();
+            } else {
+              alert(`删除失败: ${data.message}`);
+            }
+          } catch (error) {
+            console.error("删除失败:", error);
+            alert("删除失败, 网络错误或服务器异常。");
+          }
+        }
+
+        // 切换 Cookie 启用状态
+        async function toggleCookieEnabled(DedeUserID, toggleElement) {
+          try {
+            const token = localStorage.getItem("api_token");
+            if (!token) {
+              alert("请先登录以提供 API Token。");
+              return;
+            }
+
+            const response = await axios.post("/api/cookie/toggle", 
+              { DedeUserID: DedeUserID },
+              { headers: { token: token } }
+            );
+            
+            const data = response.data;
+            if (data.code === 0) {
+              // 更新开关状态
+              const isEnabled = data.enabled;
+              toggleElement.className = `toggle-switch ${isEnabled ? 'enabled' : 'disabled'}`;
+              
+              const statusText = isEnabled ? "启用" : "禁用";
+              console.log(`用户 ${DedeUserID} 已${statusText}`);
+            } else {
+              alert(`切换失败: ${data.message}`);
+            }
+          } catch (error) {
+            console.error("切换失败:", error);
+            alert("切换失败, 网络错误或服务器异常。");
+          }
+        }
+      
+        checkLogin();
+        loadAccountStatus();
+      });
+      
+          </script>
+  </body>
+</html>
