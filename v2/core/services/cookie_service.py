@@ -4,11 +4,15 @@ from __future__ import annotations
 Cookie 业务服务: 封装领域规则, 仅做一件事、写干净的业务逻辑。
 """
 
+import logging
 from typing import Any, Dict, List, Optional
 
 from ..infrastructure.repositories.cookie_repository import CookieRepository, MANAGED_KEY, RAW_KEY
 from ..infrastructure.bilibili_client import BilibiliClient
 from ..infrastructure.notifications import NotificationService, NoopNotificationService
+
+
+logger = logging.getLogger(__name__)
 
 
 class CookieService:
@@ -23,13 +27,14 @@ class CookieService:
         try:
             info = doc.get(MANAGED_KEY, {}) if isinstance(doc.get(MANAGED_KEY), dict) else {}
             dede_user_id = info.get("DedeUserID") or info.get("dede_user_id")
+            logger.info(f"Cookie 创建成功: {dede_user_id}")
             await self.notification.send(
                 title="Cookie 创建成功",
                 message=f"用户 {dede_user_id} 的 Cookie 已保存。",
                 priority=5,
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error(f"Cookie 创建后通知发送失败: {e}", exc_info=True)
         return doc
 
     async def enrich_after_create(self, dede_user_id: str) -> Optional[Dict[str, Any]]:
@@ -59,8 +64,8 @@ class CookieService:
         # 首轮检查
         try:
             doc = await self.check_cookie(dede_user_id) or doc
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"扫码后置处理-首轮检查异常: {e}")
 
         return doc
 
@@ -118,6 +123,11 @@ class CookieService:
             header_string=header_string,
         )
 
+        if not is_valid:
+            logger.warning(f"Cookie 检查失败: {dede_user_id}, 原因: {error_message}")
+        else:
+            logger.info(f"Cookie 检查通过: {dede_user_id}")
+
         # 失效则通知
         try:
             if not is_valid:
@@ -128,8 +138,8 @@ class CookieService:
                 )
             else:
                 pass
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error(f"Cookie 检查通知发送失败: {e}", exc_info=True)
         return result
 
     async def refresh_cookie(self, dede_user_id: str) -> Optional[Dict[str, Any]]:
@@ -154,11 +164,13 @@ class CookieService:
         try:
             resp = await self.client.refresh_cookie(access_token, refresh_token)
         except Exception as e:
+            logger.error(f"Cookie 刷新接口调用异常: {dede_user_id}, 错误: {e}", exc_info=True)
             return await self.repo.update_refresh_failed(dede_user_id, f"刷新接口异常: {e}")
 
         code = resp.get("code")
         if code != 0:
             message = resp.get("message", "刷新失败")
+            logger.warning(f"Cookie 刷新返回错误: {dede_user_id}, code: {code}, message: {message}")
             result = await self.repo.update_refresh_failed(dede_user_id, message)
             try:
                 await self.notification.send(
@@ -177,6 +189,7 @@ class CookieService:
 
         # 更新文件
         result = await self.repo.update_on_refresh(dede_user_id, new_token_info, new_cookie_info, ts)
+        logger.info(f"Cookie 刷新成功: {dede_user_id}")
 
         # 计算过期时间(用于通知)
         try:

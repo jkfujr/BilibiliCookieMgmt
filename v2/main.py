@@ -28,13 +28,21 @@ from core.api.routes.auth import router as auth_router
 from core.infrastructure.notifications import NoopNotificationService
 from core.infrastructure.notifications.gotify import GotifyNotificationService
 from core.scheduler.tasks import AppScheduler
+from core.utils.logger import setup_logging
+import logging
 
 
 def create_app() -> FastAPI:
+    # 初始化日志
+    setup_logging()
+    logger = logging.getLogger(__name__)
+    
     app = FastAPI(title="BilibiliCookieMgmt v2 API", version="2.0.0")
 
     # 加载配置
     config = load_config()
+    logger.info(f"配置加载完成, 端口: {config.port}")
+
     app.state.config = config
     repository = CookieRepository(base_dir=config.storage.cookie_dir)
     # 通知服务
@@ -74,10 +82,13 @@ def create_app() -> FastAPI:
 
     @app.on_event("startup")
     async def _on_startup():
+        logger.info("应用程序启动中...")
         await scheduler.start(app)
+        logger.info("调度器已启动")
 
     @app.on_event("shutdown")
     async def _on_shutdown():
+        logger.info("应用程序正在关闭...")
         await scheduler.stop()
         # 关闭通知客户端(如有)
         try:

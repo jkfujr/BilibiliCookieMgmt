@@ -4,8 +4,11 @@ from __future__ import annotations
 Bilibili 客户端
 """
 
-import time, hashlib, urllib.parse, httpx
+import time, hashlib, urllib.parse, httpx, logging
 from typing import Any, Dict, Optional
+
+
+logger = logging.getLogger(__name__)
 
 
 APP_KEY = "4409e2ce8ffd12b8"
@@ -53,6 +56,7 @@ class BilibiliClient:
             data = rsp.json()
             return {"code": data.get("code"), "data": data.get("data")}
         except httpx.HTTPError as e:
+            logger.error(f"生成二维码网络请求失败: {e}")
             return {"code": -1, "message": f"网络错误: {e}"}
 
     async def poll_qrcode_status(self, auth_code: str) -> Dict[str, Any]:
@@ -87,8 +91,10 @@ class BilibiliClient:
             elif code == -400:
                 return {"code": -400, "message": "请求错误"}
             else:
+                logger.warning(f"轮询二维码返回未知错误码: {code}, message: {data.get('message')}")
                 return {"code": code, "message": data.get("message", "未知错误")}
         except httpx.HTTPError as e:
+            logger.error(f"轮询二维码网络请求失败: {e}")
             return {"code": -1, "message": f"网络错误: {e}"}
 
     async def check_cookie_valid(self, header_string: str) -> bool:
@@ -107,7 +113,8 @@ class BilibiliClient:
             rsp = await self._client.get(url, headers=headers, timeout=10.0)
             data = rsp.json()
             return bool(data.get("code") == 0 and data.get("data", {}).get("isLogin"))
-        except httpx.HTTPError:
+        except httpx.HTTPError as e:
+            logger.error(f"检查 Cookie 有效性网络请求失败: {e}")
             return False
 
     async def get_nav(self, header_string: str) -> Optional[Dict[str, Any]]:
@@ -127,7 +134,8 @@ class BilibiliClient:
             if data.get("code") == 0:
                 return data.get("data", {})
             return None
-        except Exception:
+        except Exception as e:
+            logger.error(f"获取导航信息失败: {e}")
             return None
 
     async def fetch_buvid(self, header_string: str) -> Optional[Dict[str, Any]]:
@@ -148,7 +156,8 @@ class BilibiliClient:
             if data.get("code") == 0:
                 return data.get("data", {})
             return None
-        except httpx.HTTPError:
+        except httpx.HTTPError as e:
+            logger.error(f"获取 buvid 失败: {e}")
             return None
 
     async def refresh_cookie(self, access_key: str, refresh_token: str) -> Dict[str, Any]:
@@ -172,4 +181,5 @@ class BilibiliClient:
             data = rsp.json()
             return data
         except httpx.HTTPError as e:
+            logger.error(f"刷新 Cookie 网络请求失败: {e}")
             return {"code": -1, "message": f"网络错误: {e}"}
