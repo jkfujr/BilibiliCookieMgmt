@@ -13,6 +13,14 @@ from ...utils.security import require_api_token
 router = APIRouter(prefix="/cookies", tags=["cookies"], dependencies=[Depends(require_api_token)])
 
 
+@router.get("/random")
+async def get_random_cookie(format: str = "simple", service = Depends(get_cookie_service)):
+    result = await service.get_random_cookie(fmt=format)
+    if not result:
+        raise HTTPException(status_code=404, detail="没有可用的 Cookie")
+    return result
+
+
 @router.get("/")
 async def list_cookies(service = Depends(get_cookie_service)):
     """返回所有 Cookie 的完整文档(原始与管理信息)。"""
@@ -35,16 +43,6 @@ async def delete_cookie(DedeUserID: str, service = Depends(get_cookie_service)):
     return {"deleted": True, "DedeUserID": DedeUserID}
 
 
-@router.get("/random")
-async def get_random_cookie(format: str = "simple", service = Depends(get_cookie_service)):
-    """返回一个随机且启用且有效的 Cookie。
-    - format=simple: 返回 {DedeUserID, header_string}
-    - 其它: 返回完整文档
-    """
-    result = await service.get_random_cookie(fmt=format)
-    if not result:
-        raise HTTPException(status_code=404, detail="没有可用的 Cookie")
-    return result
 
 @router.post("/test")
 async def test_cookie(cookie: str = Body(..., embed=True, description="Cookie 请求头字符串, 如 SESSDATA=...; bili_jct=...; DedeUserID=..."),
