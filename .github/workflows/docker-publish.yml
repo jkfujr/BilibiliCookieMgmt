@@ -41,16 +41,18 @@ jobs:
         run: |
           set -euo pipefail
 
+          image_lower="$(echo "${IMAGE}" | tr '[:upper:]' '[:lower:]')"
+
           sha_short="${GITHUB_SHA::7}"
           tags=()
-          tags+=("${IMAGE}:sha-${sha_short}")
+          tags+=("${image_lower}:sha-${sha_short}")
 
           if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
-            tags+=("${IMAGE}:${GITHUB_REF_NAME}")
+            tags+=("${image_lower}:${GITHUB_REF_NAME}")
           fi
 
           if [[ "${GITHUB_REF_TYPE}" == "branch" && "${GITHUB_REF_NAME}" == "${DEFAULT_BRANCH}" ]]; then
-            tags+=("${IMAGE}:latest")
+            tags+=("${image_lower}:latest")
           fi
 
           {
