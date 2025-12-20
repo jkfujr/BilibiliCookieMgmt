@@ -2,48 +2,41 @@ from __future__ import annotations
 
 """
 程序入口: 
-- 加载配置(new_code/config.yaml)
+- 加载配置(config.yaml)
 - 构建依赖(仓库与服务)
 - 初始化 FastAPI 并挂载路由
 
 运行: 
-  python new_code/main.py
+  python main.py
 或: 
   uvicorn new_code.main:app --reload --host 0.0.0.0 --port 18000
 """
 
-import uvicorn
+import uvicorn, logging
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pathlib import Path
+from contextlib import asynccontextmanager
 
-# 修改为绝对导入, 以便从 new_code 目录直接运行 main.py
-from core.config.loader import load_config
-from core.infrastructure.repositories.cookie_repository import CookieRepository
-from core.services.cookie_service import CookieService
-from core.infrastructure.bilibili_client import BilibiliClient
-from core.api.routes.cookies import router as cookies_router
-from core.api.routes.auth import router as auth_router
-from core.infrastructure.notifications import NoopNotificationService
-from core.infrastructure.notifications.gotify import GotifyNotificationService
-from core.scheduler.tasks import AppScheduler
-from core.utils.logger import setup_logging
-import logging
-
+from core.api.routes import auth_router, cookies_router
+from core.config import load_config
+from core.infrastructure import BilibiliClient
+from core.infrastructure.notifications import GotifyNotificationService, NoopNotificationService
+from core.infrastructure.repositories import CookieRepository
+from core.scheduler import AppScheduler
+from core.services import CookieService
+from core.utils import setup_logging
 
 def create_app() -> FastAPI:
     # 初始化日志
     setup_logging()
     logger = logging.getLogger(__name__)
-    
-    app = FastAPI(title="BilibiliCookieMgmt v2 API", version="2.0.0")
 
     # 加载配置
     config = load_config()
     logger.info(f"配置加载完成, 端口: {config.port}")
 
-    app.state.config = config
     repository = CookieRepository(base_dir=config.storage.cookie_dir)
     # 通知服务
     if config.gotify.enable and config.gotify.url and config.gotify.token:
@@ -58,9 +51,34 @@ def create_app() -> FastAPI:
 
     bilibili_client = BilibiliClient()
     service = CookieService(repository=repository, notification=notification, bilibili_client=bilibili_client)
-    app.state.cookie_service = service
 
     # 路由
+    scheduler = AppScheduler(service=service, config=config)
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        logger.info("应用程序启动中...")
+        await scheduler.start(app)
+        logger.info("调度器已启动")
+        try:
+            yield
+        finally:
+            logger.info("应用程序正在关闭...")
+            await scheduler.stop()
+            try:
+                if hasattr(notification, "aclose"):
+                    await notification.aclose()  # type: ignore
+            except Exception:
+                pass
+            try:
+                await bilibili_client.aclose()
+            except Exception:
+                pass
+
+    app = FastAPI(title="BilibiliCookieMgmt v2 API", version="2.0.0", lifespan=lifespan)
+    app.state.config = config
+    app.state.cookie_service = service
+
     app.include_router(cookies_router, prefix="/api/v1")
     app.include_router(auth_router, prefix="/api/v1")
 
@@ -76,30 +94,6 @@ def create_app() -> FastAPI:
     @app.get("/", include_in_schema=False)
     async def index_page():
         return FileResponse(str(static_dir / "index.html"))
-
-    # 启动调度器
-    scheduler = AppScheduler(service=service, config=config)
-
-    @app.on_event("startup")
-    async def _on_startup():
-        logger.info("应用程序启动中...")
-        await scheduler.start(app)
-        logger.info("调度器已启动")
-
-    @app.on_event("shutdown")
-    async def _on_shutdown():
-        logger.info("应用程序正在关闭...")
-        await scheduler.stop()
-        # 关闭通知客户端(如有)
-        try:
-            if hasattr(notification, "aclose"):
-                await notification.aclose()  # type: ignore
-        except Exception:
-            pass
-        try:
-            await bilibili_client.aclose()
-        except Exception:
-            pass
 
     return app
 

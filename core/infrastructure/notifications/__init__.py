@@ -26,3 +26,13 @@ class NotificationService:
 class NoopNotificationService(NotificationService):
     async def send(self, title: str, message: str, priority: int = 5) -> None:
         return None
+
+
+from .gotify import GotifyNotificationService
+
+__all__ = [
+    "NotificationMessage",
+    "NotificationService",
+    "NoopNotificationService",
+    "GotifyNotificationService",
+]
