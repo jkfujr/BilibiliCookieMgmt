@@ -1,0 +1,11 @@
+services:
+  bilibili-cookie-mgmt:
+    build:
+      context: .
+    container_name: bilibili-cookie-mgmt
+    ports:
+      - "18000:18000"
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+      - ./data:/app/data
+    restart: unless-stopped
