@@ -1,0 +1,28 @@
+HOST: 0.0.0.0
+PORT: 18000
+
+# API token
+API_TOKEN:
+  enable: true          # 是否启用鉴权
+  token: 1145141919810  # Bearer Token 值
+
+# 存储配置
+STORAGE:
+  cookie_dir: "./data/cookie"  # Cookie 按用户ID存储为 JSON 文件
+
+# 通知
+GOTIFY:
+  enable: false
+  url: "http://HOST:PORT"          # Gotify 地址
+  token: ""                        # Gotify Token
+  priority: 5                      # 优先级
+  title: "BilibiliCookieMgmt"      # 标题
+
+# 调度器
+SCHEDULER:
+  COOKIE_CHECK:
+    enable: true
+    interval_seconds: 600          # 健康检查间隔(s)
+  COOKIE_REFRESH:
+    enable: true
+    interval_seconds: 2592000      # 刷新间隔(s, 默认30天)

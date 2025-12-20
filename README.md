@@ -17,10 +17,55 @@
 
 # 说明
 
-**_需要 Python 3.10 及以上版本_**
+**_需要 Python 3.11 及以上版本_**
 
+## 源码运行
+
+### 1. 安装依赖
+
+```bash
+pip install -U fastapi uvicorn pyyaml httpx aiofiles
 ```
-(待补充)
+
+### 2. 准备配置与数据目录
+
+- 配置文件：`./config.yaml`
+- 数据目录：`./data`（默认 Cookie 存在 `./data/cookie`）
+
+### 3. 启动
+
+```bash
+python main.py
+```
+
+### 4. 访问
+
+- 首页：`http://127.0.0.1:18000/`
+- 健康检查：`http://127.0.0.1:18000/api/v1/health`
+
+## Docker
+
+### 使用 docker
+
+```bash
+docker compose up -d --build
+```
+
+默认挂载：
+
+- `./config.yaml:/app/config.yaml:ro`
+- `./data:/app/data`
+
+### 使用发布镜像
+
+```bash
+docker pull ghcr.io/jkfujr/bilibilicookiemgmt:latest
+docker run -d \
+  --name bilibili-cookie-mgmt \
+  -p 18000:18000 \
+  -v "$(pwd)/config.yaml:/app/config.yaml:ro" \
+  -v "$(pwd)/data:/app/data" \
+  ghcr.io/jkfujr/bilibilicookiemgmt:latest
 ```
 
 # TODO
