@@ -61,7 +61,7 @@ class AppScheduler:
                 # 遍历所有 cookie 执行检查
                 items = await self.service.list_cookies()
                 if items:
-                    logger.info(f"开始检查 {len(items)} 个 Cookie")
+                    logger.debug(f"开始检查 {len(items)} 个 Cookie")
                 for doc in items:
                     info = doc.get(MANAGED_KEY, {}) if isinstance(doc.get(MANAGED_KEY), dict) else {}
                     dede_user_id = info.get("DedeUserID")

@@ -22,20 +22,25 @@ def setup_logging():
         LOG_DIR.mkdir(parents=True, exist_ok=True)
 
     logger = logging.getLogger()
-    logger.setLevel(logging.INFO)
+    logger.setLevel(logging.DEBUG)  # 根 Logger 设置为 DEBUG，具体由 Handler 过滤
 
-    # 清除现有的 handlers (避免重复添加)
+    # 隐藏部分库的日志
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+
+    # 清除现有的 handlers
     if logger.hasHandlers():
         logger.handlers.clear()
 
-    # 1. 控制台 Handler
+    # 1. 控制台 Handler (INFO)
     console_handler = logging.StreamHandler()
     console_handler.setLevel(logging.INFO)
     console_formatter = logging.Formatter(LOG_FORMAT, datefmt=DATE_FORMAT)
     console_handler.setFormatter(console_formatter)
     logger.addHandler(console_handler)
 
-    # 2. 文件 Handler (按天轮转)
+    # 2. 文件 Handler (DEBUG)
     log_file_path = LOG_DIR / LOG_FILENAME
     
     # when='midnight' 表示每天午夜轮转
@@ -48,7 +53,7 @@ def setup_logging():
         backupCount=30,
         encoding="utf-8"
     )
-    file_handler.setLevel(logging.INFO)
+    file_handler.setLevel(logging.DEBUG)
     file_handler.setFormatter(console_formatter)
     
     # 自定义 namer 和 rotator 以满足 "BCK{YYYYMMDD}.log" 的命名需求

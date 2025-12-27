@@ -126,7 +126,7 @@ class CookieService:
         if not is_valid:
             logger.warning(f"Cookie 检查失败: {dede_user_id}, 原因: {error_message}")
         else:
-            logger.info(f"Cookie 检查通过: {dede_user_id}")
+            logger.debug(f"Cookie 检查通过: {dede_user_id}")
 
         # 失效则通知
         try:
