@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 from pathlib import Path
 import os
+import sys
 import yaml
 
 
@@ -58,8 +59,14 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
     加载配置
     """
     if config_path is None:
-        base_dir = Path(__file__).resolve().parents[2]
-        config_path = str(base_dir / "config.yaml")
+        # 统一使用运行目录
+        config_path = "config.yaml"
+
+    if not os.path.exists(config_path):
+        msg = f"未找到配置文件: {config_path}"
+        if os.path.exists("config.example.yaml"):
+            msg += "。检测到 config.example.yaml，请将其复制为 config.yaml 并根据需要修改配置。"
+        raise FileNotFoundError(msg)
 
     with open(config_path, "r", encoding="utf-8") as f:
         data = yaml.safe_load(f) or {}

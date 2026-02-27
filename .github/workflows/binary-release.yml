@@ -48,8 +48,6 @@ jobs:
             platform: linux
             arch: x64
             sep: ':'
-          # macOS x64 runners (macos-12/13) are extremely slow and resource-constrained on GitHub Actions.
-          # Temporarily disabled to avoid long queue times. ARM64 (M1/M2/M3) builds are prioritized via macos-latest.
           # - os: macos-12
           #   platform: osx
           #   arch: x64
@@ -83,18 +81,19 @@ jobs:
         working-directory: ./BilibiliCookieMgmt
         run: |
           pyinstaller --onefile --name "BilibiliCookieMgmt-CLI-${{ matrix.platform }}-${{ matrix.arch }}" --add-data "static${{ matrix.sep }}static" main.py
+          cp config.example.yaml dist/config.example.yaml
 
       - name: Prepare Artifacts (Unix)
         if: runner.os != 'Windows'
         run: |
           cd BilibiliCookieMgmt/dist
-          zip -r ../../BilibiliCookieMgmt-CLI-${{ matrix.platform }}-${{ matrix.arch }}.zip BilibiliCookieMgmt-CLI-${{ matrix.platform }}-${{ matrix.arch }}
+          zip -r ../../BilibiliCookieMgmt-CLI-${{ matrix.platform }}-${{ matrix.arch }}.zip BilibiliCookieMgmt-CLI-${{ matrix.platform }}-${{ matrix.arch }} config.example.yaml
 
       - name: Prepare Artifacts (Windows)
         if: runner.os == 'Windows'
         run: |
           cd BilibiliCookieMgmt/dist
-          Compress-Archive -Path "BilibiliCookieMgmt-CLI-${{ matrix.platform }}-${{ matrix.arch }}.exe" -DestinationPath "../../BilibiliCookieMgmt-CLI-${{ matrix.platform }}-${{ matrix.arch }}.zip"
+          Compress-Archive -Path "BilibiliCookieMgmt-CLI-${{ matrix.platform }}-${{ matrix.arch }}.exe", "config.example.yaml" -DestinationPath "../../BilibiliCookieMgmt-CLI-${{ matrix.platform }}-${{ matrix.arch }}.zip"
 
       - name: Upload Build Artifact
         uses: actions/upload-artifact@v4
