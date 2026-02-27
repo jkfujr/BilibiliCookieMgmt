@@ -1,0 +1,137 @@
+name: Binary Release
+
+on:
+  push:
+    branches: [ "main" ]
+    tags: [ "v*" ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-webui:
+    name: Build WebUI
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Build WebUI
+        working-directory: ./BilibiliCookieMgmt-web
+        run: |
+          npm install
+          npm run build
+
+      - name: Upload WebUI Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: webui-dist
+          path: ./BilibiliCookieMgmt-web/dist
+
+  build-backend:
+    name: Build Backend
+    needs: build-webui
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            platform: win
+            arch: x64
+            sep: ';'
+          - os: ubuntu-latest
+            platform: linux
+            arch: x64
+            sep: ':'
+          - os: macos-13
+            platform: osx
+            arch: x64
+            sep: ':'
+          - os: macos-latest
+            platform: osx
+            arch: arm64
+            sep: ':'
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Download WebUI Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: webui-dist
+          path: ./BilibiliCookieMgmt/static
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install fastapi uvicorn pyyaml httpx aiofiles pyinstaller
+
+      - name: Build with PyInstaller
+        working-directory: ./BilibiliCookieMgmt
+        run: |
+          pyinstaller --onefile --name "BilibiliCookieMgmt-CLI-${{ matrix.platform }}-${{ matrix.arch }}" --add-data "static${{ matrix.sep }}static" main.py
+
+      - name: Prepare Artifacts (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          cd BilibiliCookieMgmt/dist
+          zip -r ../../BilibiliCookieMgmt-CLI-${{ matrix.platform }}-${{ matrix.arch }}.zip BilibiliCookieMgmt-CLI-${{ matrix.platform }}-${{ matrix.arch }}
+
+      - name: Prepare Artifacts (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          cd BilibiliCookieMgmt/dist
+          Compress-Archive -Path "BilibiliCookieMgmt-CLI-${{ matrix.platform }}-${{ matrix.arch }}.exe" -DestinationPath "../../BilibiliCookieMgmt-CLI-${{ matrix.platform }}-${{ matrix.arch }}.zip"
+
+      - name: Upload Build Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: BilibiliCookieMgmt-CLI-${{ matrix.platform }}-${{ matrix.arch }}
+          path: BilibiliCookieMgmt-CLI-${{ matrix.platform }}-${{ matrix.arch }}.zip
+
+  release:
+    name: Release
+    needs: build-backend
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/'))
+    steps:
+      - name: Download All Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Display Artifacts
+        run: ls -R artifacts
+
+      - name: Create Release (Tag)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*.zip
+          prerelease: false
+          generate_release_notes: true
+
+      - name: Create Release (Nightly)
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: nightly
+          name: Nightly Build
+          body: |
+            Automatic nightly build from main branch.
+            Commit: ${{ github.sha }}
+            Time: ${{ github.event.head_commit.timestamp }}
+          files: artifacts/**/*.zip
+          prerelease: true
+          make_latest: false
