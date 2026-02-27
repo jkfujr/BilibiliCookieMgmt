@@ -17,7 +17,25 @@
 
 ## 快速开始
 
-### Docker (推荐)
+### 二进制运行 (推荐)
+
+从 [Releases](https://github.com/jkfujr/BilibiliCookieMgmt/releases) 下载对应系统的最新构建。
+
+1. 解压下载的压缩包。
+2. 将 `config.example.yaml` 复制为 `config.yaml` 并修改配置。
+3. 运行可执行文件。
+   - Windows: 双击 `BilibiliCookieMgmt-CLI-win-x64.exe`
+   - Linux/macOS:
+     ```bash
+     chmod +x BilibiliCookieMgmt-CLI-*
+     ./BilibiliCookieMgmt-CLI-*
+     ```
+   - 支持通过命令行参数指定配置文件路径：
+     ```bash
+     ./BilibiliCookieMgmt-CLI-* -c /path/to/custom_config.yaml
+     ```
+
+### Docker
 
 1. 拉取最新镜像：
 
