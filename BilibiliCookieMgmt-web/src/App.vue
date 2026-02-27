@@ -178,7 +178,7 @@ const verifyLogin = async (auth_code) => {
     const res = await api.get('/v1/auth/tv/poll', { params: { auth_code } })
     const data = res.data
     
-    if (data.code === 0 || (!data.code && data.mid)) {
+    if (data.code === 0 || (!data.code && (data.mid || data.managed))) {
         showMsg('扫码登录成功！')
         closeQrDialog()
         fetchAccounts()
