@@ -48,10 +48,12 @@ jobs:
             platform: linux
             arch: x64
             sep: ':'
-          - os: macos-12
-            platform: osx
-            arch: x64
-            sep: ':'
+          # macOS x64 runners (macos-12/13) are extremely slow and resource-constrained on GitHub Actions.
+          # Temporarily disabled to avoid long queue times. ARM64 (M1/M2/M3) builds are prioritized via macos-latest.
+          # - os: macos-12
+          #   platform: osx
+          #   arch: x64
+          #   sep: ':'
           - os: macos-latest
             platform: osx
             arch: arm64
