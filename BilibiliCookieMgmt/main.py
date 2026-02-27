@@ -90,6 +90,7 @@ def create_app() -> FastAPI:
     base_dir = Path(__file__).resolve().parent
     static_dir = base_dir / "static"
     if static_dir.exists() and static_dir.is_dir():
+        app.mount("/assets", StaticFiles(directory=str(static_dir / "assets")), name="assets")
         app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
         @app.get("/", include_in_schema=False)
