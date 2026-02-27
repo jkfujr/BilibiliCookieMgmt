@@ -89,11 +89,19 @@ def create_app() -> FastAPI:
     # 主页
     base_dir = Path(__file__).resolve().parent
     static_dir = base_dir / "static"
-    app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+    if static_dir.exists() and static_dir.is_dir():
+        app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
-    @app.get("/", include_in_schema=False)
-    async def index_page():
-        return FileResponse(str(static_dir / "index.html"))
+        @app.get("/", include_in_schema=False)
+        async def index_page():
+            index_file = static_dir / "index.html"
+            if index_file.exists():
+                return FileResponse(str(index_file))
+            return {"status": "ok", "message": "Backend is running. Frontend static files not found."}
+    else:
+        @app.get("/", include_in_schema=False)
+        async def index_page():
+            return {"status": "ok", "message": "Backend is running. Frontend static files directory not found."}
 
     return app
 
