@@ -288,6 +288,33 @@ const getExpireTime = (item) => {
   return sess?.expires
 }
 
+const copyContent = async (text) => {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text)
+      showMsg('已复制到剪贴板')
+    } else {
+      throw new Error('Clipboard API not available')
+    }
+  } catch (e) {
+    const textArea = document.createElement("textarea")
+    textArea.value = text
+    textArea.style.position = "fixed"
+    textArea.style.left = "-9999px"
+    textArea.style.top = "0"
+    document.body.appendChild(textArea)
+    textArea.focus()
+    textArea.select()
+    try {
+      document.execCommand('copy')
+      showMsg('已复制到剪贴板')
+    } catch (err) {
+      showMsg('复制失败，请手动复制', 'error')
+    }
+    document.body.removeChild(textArea)
+  }
+}
+
 onMounted(() => {
   if (token.value) {
     fetchAccounts()
@@ -335,7 +362,7 @@ onMounted(() => {
 
       <template v-slot:append>
         <div class="pa-4">
-          <v-btn block variant="tonal" size="small" prepend-icon="mdi-github" href="https://github.com/nICEnnnnnnnn/BilibiliCookieMgmt" target="_blank">
+          <v-btn block variant="tonal" size="small" prepend-icon="mdi-github" href="https://github.com/jkfujr/BilibiliCookieMgmt" target="_blank">
             Open Source
           </v-btn>
         </div>
@@ -544,20 +571,20 @@ onMounted(() => {
     <v-dialog v-model="cookieDialog" max-width="800">
       <v-card title="Cookie 凭据详情">
         <v-tabs v-model="currentCookieTab" color="primary" align-tabs="title">
-          <v-tab value="simple">标准 Header</v-tab>
-          <v-tab value="complete">原始 JSON 数据</v-tab>
+          <v-tab value="simple">标准</v-tab>
+          <v-tab value="complete">原始</v-tab>
         </v-tabs>
 
         <v-window v-model="currentCookieTab">
           <v-window-item value="simple">
             <v-card-text>
               <v-textarea v-model="currentCookie.simple" readonly auto-grow rows="8" variant="filled" class="font-monospace text-body-2"></v-textarea>
-              <v-btn block color="primary" variant="tonal" class="mt-2" prepend-icon="mdi-content-copy" @click="navigator.clipboard.writeText(currentCookie.simple); showMsg('已复制到剪贴板')">复制 Header 字符串</v-btn>
+              <v-btn block color="primary" variant="tonal" class="mt-2" prepend-icon="mdi-content-copy" @click="copyContent(currentCookie.simple)">复制</v-btn>
             </v-card-text>
           </v-window-item>
           <v-window-item value="complete">
             <v-card-text>
-              <v-textarea v-model="currentCookie.complete" readonly auto-grow rows="12" variant="filled" class="font-monospace text-caption"></v-textarea>
+              <v-textarea v-model="currentCookie.complete" readonly rows="15" variant="filled" class="font-monospace text-caption"></v-textarea>
             </v-card-text>
           </v-window-item>
         </v-window>
