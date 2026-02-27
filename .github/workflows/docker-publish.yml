@@ -25,6 +25,11 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
       - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
@@ -61,11 +66,21 @@ jobs:
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Build WebUI
+        working-directory: ./BilibiliCookieMgmt-web
+        run: |
+          npm install
+          npm run build
+          # Ensure target directory exists
+          mkdir -p ../BilibiliCookieMgmt/static
+          # Copy build artifacts to the static folder expected by the backend
+          cp -r dist/* ../BilibiliCookieMgmt/static/
+
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
-          context: .
-          file: ./Dockerfile
+          context: ./BilibiliCookieMgmt
+          file: ./BilibiliCookieMgmt/Dockerfile
           push: true
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta.outputs.tags }}

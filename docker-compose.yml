@@ -1,7 +1,8 @@
 services:
   bilibili-cookie-mgmt:
     build:
-      context: .
+      context: ./BilibiliCookieMgmt
+      dockerfile: Dockerfile
     container_name: bilibili-cookie-mgmt
     ports:
       - "18000:18000"
