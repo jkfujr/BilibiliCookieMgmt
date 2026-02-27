@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 from pathlib import Path
 import os
-import sys
+import argparse
 import yaml
 
 
@@ -58,8 +58,15 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
     """
     加载配置
     """
+    # 优先使用命令行参数指定的配置文件
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("-c", "--config", help="配置文件路径")
+    args, _ = parser.parse_known_args()
+
+    if args.config:
+        config_path = args.config
+
     if config_path is None:
-        # 统一使用运行目录
         config_path = "config.yaml"
 
     if not os.path.exists(config_path):

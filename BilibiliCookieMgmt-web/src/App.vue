@@ -448,8 +448,8 @@ onMounted(() => {
                     <v-icon icon="mdi-account" size="16"></v-icon>
                 </v-avatar>
                 <div class="d-flex flex-column">
-                  <div class="text-body-2 font-weight-bold lh-1">{{ screenshotMode ? `用户_${index + 1}` : (item.managed?.username || '未知用户') }}</div>
-                  <div class="text-caption text-grey-darken-1 font-monospace lh-1" style="font-size: 0.7rem;">{{ screenshotMode ? '********' : item.managed?.DedeUserID }}</div>
+                  <div class="text-body-2 font-weight-bold lh-1">{{ screenshotMode ? `你好 ${index + 1}` : (item.managed?.username || '未知用户') }}</div>
+                  <div class="text-caption text-grey-darken-1 font-monospace lh-1" style="font-size: 0.7rem;">{{ screenshotMode ? 114514 : item.managed?.DedeUserID }}</div>
                 </div>
               </div>
             </template>

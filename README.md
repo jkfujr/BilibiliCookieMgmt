@@ -2,8 +2,7 @@
 
 一个基于 Python 和 Vuetify 的 比例比例 Cookie 管理工具。
 
-
-![截图](https://github.com/user-attachments/assets/c61d0169-0d78-4387-8714-eeea9b56c5ac)
+![截图](https://github.com/user-attachments/assets/a2f4895a-2588-42cc-a0c0-cc9f801ca563)
 
 ## 功能特性
 
@@ -18,13 +17,24 @@
 
 ## 快速开始
 
-### Docker Compose (推荐)
+### Docker (推荐)
 
-1. 确保根目录存在 `config.yaml` 配置文件。
-2. 启动服务：
+1. 拉取最新镜像：
 
 ```bash
-docker-compose up -d --build
+docker pull ghcr.io/jkfujr/bilibilicookiemgmt:latest
+```
+
+2. 确保根目录存在 `config.yaml` 配置文件。
+
+3. 启动服务：
+
+```bash
+docker run -d --name bilibili-cookie-mgmt \
+  -p 18000:18000 \
+  -v ./config.yaml:/app/config.yaml \
+  -v ./data:/app/data \
+  ghcr.io/jkfujr/bilibilicookiemgmt:latest
 ```
 
 ### 源码运行
