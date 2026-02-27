@@ -2,7 +2,8 @@
 
 一个基于 Python 和 Vuetify 的 比例比例 Cookie 管理工具。
 
-![截图](https://github.com/user-attachments/assets/a2f4895a-2588-42cc-a0c0-cc9f801ca563)
+
+![截图](https://github.com/user-attachments/assets/c61d0169-0d78-4387-8714-eeea9b56c5ac)
 
 ## 功能特性
 
