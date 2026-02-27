@@ -48,7 +48,7 @@ jobs:
             platform: linux
             arch: x64
             sep: ':'
-          - os: macos-13
+          - os: macos-12
             platform: osx
             arch: x64
             sep: ':'
