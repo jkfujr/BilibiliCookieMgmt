@@ -59,6 +59,17 @@ class CookieRepository:
 
         return doc
 
+    async def _fill_missing_tags(self, doc: Dict[str, Any], path: str) -> Dict[str, Any]:
+        managed = doc.get(MANAGED_KEY)
+        if not isinstance(managed, dict) or "tags" in managed:
+            return doc
+
+        managed["tags"] = []
+        doc[MANAGED_KEY] = managed
+        async with aiofiles.open(path, "w", encoding="utf-8") as f:
+            await f.write(json.dumps(doc, ensure_ascii=False, indent=2))
+        return doc
+
     @staticmethod
     def _extract_cookie_map(raw: Dict[str, Any]) -> Dict[str, str]:
         """从原始响应中提取 cookie 名称到值的映射。"""
@@ -133,7 +144,10 @@ class CookieRepository:
         try:
             async with aiofiles.open(path, "r", encoding="utf-8") as f:
                 content = await f.read()
-                return self._validate_doc(json.loads(content))
+                doc = json.loads(content)
+                if isinstance(doc, dict):
+                    doc = await self._fill_missing_tags(doc, path)
+                return self._validate_doc(doc)
         except json.JSONDecodeError:
             return None
 

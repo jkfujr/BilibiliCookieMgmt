@@ -214,7 +214,7 @@ class RepositoryTagTests(unittest.IsolatedAsyncioTestCase):
             },
         )
 
-    async def test_legacy_document_without_tags_is_rejected(self) -> None:
+    async def test_legacy_document_without_tags_is_filled_and_persisted(self) -> None:
         legacy_doc = {
             "raw": build_raw("1002"),
             "managed": {
@@ -232,8 +232,34 @@ class RepositoryTagTests(unittest.IsolatedAsyncioTestCase):
         }
         (self.cookie_dir / "1002.json").write_text(json.dumps(legacy_doc, ensure_ascii=False), encoding="utf-8")
 
+        doc = await self.repo.get("1002")
+        self.assertIsNotNone(doc)
+        self.assertEqual(doc["managed"]["tags"], [])
+
+        stored_doc = json.loads((self.cookie_dir / "1002.json").read_text(encoding="utf-8"))
+        self.assertEqual(stored_doc["managed"]["tags"], [])
+
+    async def test_legacy_document_with_invalid_tags_value_is_rejected(self) -> None:
+        legacy_doc = {
+            "raw": build_raw("1003"),
+            "managed": {
+                "DedeUserID": "1003",
+                "update_time": "2026-01-01T00:00:00",
+                "last_check_time": None,
+                "last_refresh_time": None,
+                "refresh_status": "not_needed",
+                "error_message": None,
+                "header_string": "DedeUserID=1003",
+                "is_enabled": True,
+                "status": "unknown",
+                "username": None,
+                "tags": None,
+            },
+        }
+        (self.cookie_dir / "1003.json").write_text(json.dumps(legacy_doc, ensure_ascii=False), encoding="utf-8")
+
         with self.assertRaisesRegex(ValueError, "managed.tags"):
-            await self.repo.get("1002")
+            await self.repo.get("1003")
 
 
 class ServiceTagTests(unittest.IsolatedAsyncioTestCase):
@@ -353,7 +379,7 @@ class ApiTagTests(unittest.TestCase):
         self.assertEqual(cookie_doc["managed"]["tags"], ["主力号", "直播"])
         self.assertEqual(cookie_doc["managed"]["status"], "valid")
 
-    def test_invalid_legacy_document_is_rejected_by_api(self) -> None:
+    def test_legacy_document_without_tags_is_filled_by_api(self) -> None:
         legacy_doc = {
             "raw": build_raw("3999"),
             "managed": {
@@ -371,13 +397,12 @@ class ApiTagTests(unittest.TestCase):
         }
         (self.cookie_dir / "3999.json").write_text(json.dumps(legacy_doc, ensure_ascii=False), encoding="utf-8")
 
-        error_client = TestClient(self.app, raise_server_exceptions=False)
-        try:
-            response = error_client.get("/api/v1/cookies/3999", headers=self.auth_headers)
-        finally:
-            error_client.close()
+        response = self.client.get("/api/v1/cookies/3999", headers=self.auth_headers)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["managed"]["tags"], [])
 
-        self.assertEqual(response.status_code, 500)
+        stored_doc = json.loads((self.cookie_dir / "3999.json").read_text(encoding="utf-8"))
+        self.assertEqual(stored_doc["managed"]["tags"], [])
 
 
 class MigrationScriptTests(unittest.TestCase):
