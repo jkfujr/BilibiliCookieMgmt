@@ -6,7 +6,7 @@ import {
   filterAccountsByTags,
   getAccountTags,
   normalizeTagList,
-} from '../BilibiliCookieMgmt-web/src/accountTagUtils.js'
+} from '../BilibiliCookieMgmt-web/src/utils/accountTagUtils.js'
 
 
 const accounts = [

@@ -52,6 +52,22 @@ def build_raw(uid: str, prefix: str = "base") -> dict:
     }
 
 
+def build_legacy_raw(uid: str) -> dict:
+    raw = build_raw(uid, prefix="legacy")
+    raw["_cookiemgmt"] = {
+        "update_time": 1700000000,
+        "last_check_time": 1700000100,
+        "last_refresh_time": 1700000200,
+        "refresh_status": "ok",
+        "error_message": None,
+        "is_enabled": True,
+        "status": "valid",
+        "cookie_valid": True,
+        "username": f"旧用户{uid}",
+    }
+    return raw
+
+
 def write_config(config_path: Path, cookie_dir: Path) -> None:
     config_path.write_text(
         textwrap.dedent(
@@ -94,6 +110,18 @@ def load_test_app(config_path: Path):
     finally:
         sys.argv = old_argv
     return module.app
+
+
+def load_migrate_module():
+    module_name = "test_migrate_v1_to_v2"
+    module_path = BACKEND_DIR / "scripts" / "migrate_v1_to_v2.py"
+    spec = importlib.util.spec_from_file_location(module_name, module_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("无法加载迁移脚本模块")
+
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def close_log_handlers() -> None:
@@ -164,7 +192,7 @@ class RepositoryTagTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(cleared)
         self.assertEqual(cleared["managed"]["tags"], [])
 
-    async def test_legacy_document_without_tags_is_compatible(self) -> None:
+    async def test_legacy_document_without_tags_is_rejected(self) -> None:
         legacy_doc = {
             "raw": build_raw("1002"),
             "managed": {
@@ -182,13 +210,8 @@ class RepositoryTagTests(unittest.IsolatedAsyncioTestCase):
         }
         (self.cookie_dir / "1002.json").write_text(json.dumps(legacy_doc, ensure_ascii=False), encoding="utf-8")
 
-        loaded = await self.repo.get("1002")
-        self.assertIsNotNone(loaded)
-        self.assertEqual(loaded["managed"]["tags"], [])
-
-        updated = await self.repo.update_tags("1002", ["备用"])
-        self.assertIsNotNone(updated)
-        self.assertEqual(updated["managed"]["tags"], ["备用"])
+        with self.assertRaisesRegex(ValueError, "managed.tags"):
+            await self.repo.get("1002")
 
 
 class ServiceTagTests(unittest.IsolatedAsyncioTestCase):
@@ -307,6 +330,69 @@ class ApiTagTests(unittest.TestCase):
         cookie_doc = cookie_response.json()
         self.assertEqual(cookie_doc["managed"]["tags"], ["主力号", "直播"])
         self.assertEqual(cookie_doc["managed"]["status"], "valid")
+
+    def test_invalid_legacy_document_is_rejected_by_api(self) -> None:
+        legacy_doc = {
+            "raw": build_raw("3999"),
+            "managed": {
+                "DedeUserID": "3999",
+                "update_time": "2026-01-01T00:00:00",
+                "last_check_time": None,
+                "last_refresh_time": None,
+                "refresh_status": "not_needed",
+                "error_message": None,
+                "header_string": "SESSDATA=test; DedeUserID=3999",
+                "is_enabled": True,
+                "status": "unknown",
+                "username": "旧用户3999",
+            },
+        }
+        (self.cookie_dir / "3999.json").write_text(json.dumps(legacy_doc, ensure_ascii=False), encoding="utf-8")
+
+        error_client = TestClient(self.app, raise_server_exceptions=False)
+        try:
+            response = error_client.get("/api/v1/cookies/3999", headers=self.auth_headers)
+        finally:
+            error_client.close()
+
+        self.assertEqual(response.status_code, 500)
+
+
+class MigrationScriptTests(unittest.TestCase):
+    def test_migrate_outputs_current_managed_structure(self) -> None:
+        module = load_migrate_module()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            src_dir = root / "src"
+            dst_dir = root / "dst"
+            src_dir.mkdir(parents=True, exist_ok=True)
+            legacy_uid = "5001"
+            (src_dir / f"{legacy_uid}.json").write_text(
+                json.dumps(build_legacy_raw(legacy_uid), ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+
+            result = asyncio.run(
+                module.migrate(
+                    src_dir=src_dir,
+                    dst_dir=dst_dir,
+                    ids=None,
+                    dry_run=False,
+                    overwrite=True,
+                    conform_raw=True,
+                )
+            )
+
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["migrated"], 1)
+
+            migrated_doc = json.loads((dst_dir / f"{legacy_uid}.json").read_text(encoding="utf-8"))
+            managed = migrated_doc["managed"]
+            self.assertEqual(managed["DedeUserID"], legacy_uid)
+            self.assertEqual(managed["tags"], [])
+            self.assertTrue(managed["header_string"].startswith("SESSDATA="))
+            self.assertEqual(managed["status"], "valid")
+            self.assertEqual(managed["username"], f"旧用户{legacy_uid}")
 
 
 if __name__ == "__main__":

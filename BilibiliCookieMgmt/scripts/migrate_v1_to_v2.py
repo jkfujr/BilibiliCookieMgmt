@@ -32,17 +32,16 @@ from datetime import datetime
 
 
 def _project_root_from_this_file() -> Path:
-    # 本脚本位于 v2/scripts 下
-    # 返回 v2 根目录
+    # 本脚本位于后端 scripts 下
+    # 返回后端根目录
     return Path(__file__).resolve().parents[1]
 
 
-def _ensure_v2_importable():
-    """确保可以将 v2 作为包导入 (将项目根目录加入 sys.path)"""
-    v2_root = _project_root_from_this_file()
-    project_root = v2_root.parent
-    if str(project_root) not in sys.path:
-        sys.path.insert(0, str(project_root))
+def _ensure_backend_importable():
+    """确保可以导入后端模块。"""
+    backend_root = _project_root_from_this_file()
+    if str(backend_root) not in sys.path:
+        sys.path.insert(0, str(backend_root))
 
 
 
@@ -93,14 +92,13 @@ def _extract_dede_user_id(raw: Dict[str, Any]) -> Optional[str]:
 
 async def _save_with_repo(raw: Dict[str, Any], dst_dir: Path) -> Tuple[bool, Optional[str], Optional[Path], Optional[str]]:
     """
-    使用 v2 仓库保存为两段式文档。
+    使用当前后端仓库保存为两段式文档。
     返回: (ok, dede_user_id, target_path, error)
     """
-    # 确保 v2 可导入
-    _ensure_v2_importable()
+    _ensure_backend_importable()
 
     try:
-        from v2.core.infrastructure.repositories.cookie_repository import CookieRepository  # type: ignore
+        from core.infrastructure.repositories.cookie_repository import CookieRepository  # type: ignore
     except Exception as e:
         return False, None, None, f"导入 CookieRepository 失败: {e}"
 
@@ -118,19 +116,18 @@ async def _save_with_repo(raw: Dict[str, Any], dst_dir: Path) -> Tuple[bool, Opt
 def _resolve_dst_dir(dst_opt: str) -> Path:
     """
     根据参数解析目标目录: 
-    - dst_opt == "auto" 时: 读取 v2 配置获取 storage.cookie_dir
+    - dst_opt == "auto" 时: 读取后端配置获取 storage.cookie_dir
     - 否则按显式路径解析
     """
     root = _project_root_from_this_file()
     if dst_opt == "auto":
-        # 确保 v2 可导入
-        _ensure_v2_importable()
+        _ensure_backend_importable()
         try:
-            from v2.core.config.loader import load_config  # type: ignore
+            from core.config.loader import load_config  # type: ignore
             cfg = load_config(None)
             d = Path(cfg.storage.cookie_dir)
             if not d.is_absolute():
-                # 相对路径相对于 v2 包根目录(loader 中使用的是项目根)
+                # 相对路径相对于后端根目录
                 d = root / d
             return d
         except Exception as e:
@@ -205,7 +202,8 @@ def _build_managed_for_v2(raw_v2: Dict[str, Any], legacy: Dict[str, Any]) -> Dic
     # 复用仓库的静态方法生成 header_string
     # 注意: 这里不调用 save_from_raw, 避免在 raw 中保留 _cookiemgmt
     try:
-        from v2.core.infrastructure.repositories.cookie_repository import CookieRepository  # type: ignore
+        _ensure_backend_importable()
+        from core.infrastructure.repositories.cookie_repository import CookieRepository  # type: ignore
         cookie_map = CookieRepository._extract_cookie_map(raw_v2)
         header_str = CookieRepository._build_header_string(cookie_map)
     except Exception:

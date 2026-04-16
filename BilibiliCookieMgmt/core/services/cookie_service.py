@@ -39,7 +39,7 @@ class CookieService:
         doc = await self.repo.save_from_raw(raw)
         try:
             info = doc.get(MANAGED_KEY, {}) if isinstance(doc.get(MANAGED_KEY), dict) else {}
-            dede_user_id = info.get("DedeUserID") or info.get("dede_user_id")
+            dede_user_id = info.get("DedeUserID")
             logger.info(f"Cookie 创建成功: {dede_user_id}")
             await self.notification.send(
                 title="Cookie 创建成功",
@@ -103,11 +103,7 @@ class CookieService:
             return None
 
         info = doc.get(MANAGED_KEY, {}) if isinstance(doc.get(MANAGED_KEY), dict) else {}
-        header_string = info.get("header_string")
-        if not header_string:
-            raw = doc.get(RAW_KEY, {}) if isinstance(doc.get(RAW_KEY), dict) else {}
-            cookie_map = CookieRepository._extract_cookie_map(raw)
-            header_string = CookieRepository._build_header_string(cookie_map)
+        header_string = info["header_string"]
 
         is_valid = True
         error_message: str | None = None
