@@ -1,4 +1,5 @@
 <script setup>
+import TagFilterBar from '../dashboard/TagFilterBar.vue'
 import { getAccountTags } from '../../utils/accountTagUtils'
 import { formatTime, getExpireTime } from '../../utils/accountUtils'
 
@@ -19,6 +20,18 @@ defineProps({
     type: Boolean,
     required: true,
   },
+  selectedTags: {
+    type: Array,
+    required: true,
+  },
+  availableTags: {
+    type: Array,
+    required: true,
+  },
+  matchMode: {
+    type: String,
+    required: true,
+  },
 })
 
 const emit = defineEmits([
@@ -30,6 +43,8 @@ const emit = defineEmits([
   'delete-cookie',
   'clear-filter',
   'start-scan',
+  'update:selected-tags',
+  'update:match-mode',
 ])
 
 const headers = [
@@ -114,6 +129,20 @@ const getStatusDisplay = (status) => {
         >
           无标签
         </v-chip>
+      </div>
+    </template>
+
+    <template #header.tags>
+      <div class="d-flex align-center ga-1">
+        <span>标签</span>
+        <TagFilterBar
+          :selected-tags="selectedTags"
+          :available-tags="availableTags"
+          :match-mode="matchMode"
+          @update:selected-tags="emit('update:selected-tags', $event)"
+          @update:match-mode="emit('update:match-mode', $event)"
+          @clear="emit('clear-filter')"
+        />
       </div>
     </template>
 

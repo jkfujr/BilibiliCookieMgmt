@@ -4,7 +4,6 @@ import { ref } from 'vue'
 import { createApiClient } from './api/client'
 import AccountTable from './components/accounts/AccountTable.vue'
 import StatsCards from './components/dashboard/StatsCards.vue'
-import TagFilterBar from './components/dashboard/TagFilterBar.vue'
 import CookieDetailDialog from './components/dialogs/CookieDetailDialog.vue'
 import DeleteConfirmDialog from './components/dialogs/DeleteConfirmDialog.vue'
 import LoginDialog from './components/dialogs/LoginDialog.vue'
@@ -158,6 +157,7 @@ const updateDeleteDialog = (value) => {
   }
   closeDeleteDialog()
 }
+
 </script>
 
 <template>
@@ -198,21 +198,21 @@ const updateDeleteDialog = (value) => {
       <v-container fluid class="pa-6">
         <StatsCards :stats="stats" />
 
-        <TagFilterBar
-          :selected-tags="selectedTags"
-          :available-tags="availableTags"
-          :match-mode="tagMatchMode"
-          @update:selected-tags="updateSelectedTags"
-          @update:match-mode="updateTagMatchMode"
-          @clear="clearTagFilter"
-        />
-
         <v-card elevation="2">
+          <div class="px-6 py-4">
+            <div class="text-h6 font-weight-bold">账号列表</div>
+          </div>
+
+          <v-divider></v-divider>
+
           <AccountTable
             :items="filteredAccounts"
             :loading="loading"
             :screenshot-mode="screenshotMode"
             :has-tag-filter="selectedTags.length > 0"
+            :selected-tags="selectedTags"
+            :available-tags="availableTags"
+            :match-mode="tagMatchMode"
             @toggle-enabled="toggleEnabled"
             @edit-tags="openTagDialog"
             @view-cookie="viewCookie"
@@ -221,6 +221,8 @@ const updateDeleteDialog = (value) => {
             @delete-cookie="requestDelete"
             @clear-filter="clearTagFilter"
             @start-scan="startScan"
+            @update:selected-tags="updateSelectedTags"
+            @update:match-mode="updateTagMatchMode"
           />
         </v-card>
       </v-container>
