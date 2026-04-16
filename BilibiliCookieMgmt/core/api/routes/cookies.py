@@ -92,3 +92,16 @@ async def set_enabled(DedeUserID: str, is_enabled: bool = Body(..., embed=True, 
     if not doc:
         raise HTTPException(status_code=404, detail="Cookie 不存在")
     return doc
+
+
+@router.patch("/{DedeUserID}/tags")
+async def set_tags(
+    DedeUserID: str,
+    tags: List[str] = Body(..., embed=True, description="账号标签列表"),
+    service = Depends(get_cookie_service),
+):
+    """设置账号标签。"""
+    doc = await service.set_tags(DedeUserID, tags)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Cookie 不存在")
+    return doc

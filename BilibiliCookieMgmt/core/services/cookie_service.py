@@ -15,6 +15,19 @@ from ..infrastructure.notifications import NotificationService, NoopNotification
 logger = logging.getLogger(__name__)
 
 
+def _normalize_tags(tags: List[str]) -> List[str]:
+    """整理标签输入，去空白、去空值、去重并保持原顺序。"""
+    normalized: List[str] = []
+    seen = set()
+    for tag in tags:
+        value = str(tag).strip()
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        normalized.append(value)
+    return normalized
+
+
 class CookieService:
     def __init__(self, repository: CookieRepository, notification: NotificationService | None = None, bilibili_client: BilibiliClient | None = None):
         self.repo = repository
@@ -328,6 +341,10 @@ class CookieService:
     async def set_enabled(self, dede_user_id: str, is_enabled: bool) -> Optional[Dict[str, Any]]:
         """设置启用/禁用状态(仅影响随机 Cookie 选择)。"""
         return await self.repo.update_enabled(dede_user_id, is_enabled)
+
+    async def set_tags(self, dede_user_id: str, tags: List[str]) -> Optional[Dict[str, Any]]:
+        """设置账号标签。"""
+        return await self.repo.update_tags(dede_user_id, _normalize_tags(tags))
 
     async def get_random_cookie(self, fmt: str = "simple") -> Optional[Dict[str, Any]]:
         """

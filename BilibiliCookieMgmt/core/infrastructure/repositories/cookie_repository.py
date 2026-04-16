@@ -32,6 +32,17 @@ class CookieRepository:
         return os.path.join(self.base_dir, f"{dede_user_id}.json")
 
     @staticmethod
+    def _ensure_managed_tags(doc: Dict[str, Any]) -> Dict[str, Any]:
+        managed = doc.get(MANAGED_KEY, {}) if isinstance(doc.get(MANAGED_KEY), dict) else {}
+        tags = managed.get("tags")
+        if isinstance(tags, list):
+            managed["tags"] = [tag for tag in tags if isinstance(tag, str)]
+        else:
+            managed["tags"] = []
+        doc[MANAGED_KEY] = managed
+        return doc
+
+    @staticmethod
     def _extract_cookie_map(raw: Dict[str, Any]) -> Dict[str, str]:
         """从原始响应中提取 cookie 名称到值的映射。"""
         cookies = raw.get("cookie_info", {}).get("cookies", [])
@@ -95,6 +106,7 @@ class CookieRepository:
             is_enabled=True,
             status=CookieStatus.UNKNOWN,
             username=None,
+            tags=[],
         )
 
         doc = {
@@ -106,7 +118,7 @@ class CookieRepository:
         async with aiofiles.open(file_path, "w", encoding="utf-8") as f:
             await f.write(json.dumps(doc, ensure_ascii=False, indent=2))
 
-        return doc
+        return self._ensure_managed_tags(doc)
 
     async def get(self, dede_user_id: str) -> Optional[Dict[str, Any]]:
         path = self._file_path(dede_user_id)
@@ -115,7 +127,7 @@ class CookieRepository:
         try:
             async with aiofiles.open(path, "r", encoding="utf-8") as f:
                 content = await f.read()
-                return json.loads(content)
+                return self._ensure_managed_tags(json.loads(content))
         except json.JSONDecodeError:
             return None
 
@@ -143,6 +155,7 @@ class CookieRepository:
         doc = await self.get(dede_user_id)
         if not doc:
             return None
+        doc = self._ensure_managed_tags(doc)
         managed = doc.get(MANAGED_KEY, {}) if isinstance(doc.get(MANAGED_KEY), dict) else {}
         managed["status"] = CookieStatus.VALID.value if valid else CookieStatus.INVALID.value
         managed["last_check_time"] = datetime.now().isoformat()
@@ -167,6 +180,7 @@ class CookieRepository:
         doc = await self.get(dede_user_id)
         if not doc:
             return None
+        doc = self._ensure_managed_tags(doc)
         raw = doc.get(RAW_KEY, {}) if isinstance(doc.get(RAW_KEY), dict) else {}
         if not isinstance(raw, dict):
             raw = {}
@@ -199,6 +213,7 @@ class CookieRepository:
         doc = await self.get(dede_user_id)
         if not doc:
             return None
+        doc = self._ensure_managed_tags(doc)
         managed = doc.get(MANAGED_KEY, {}) if isinstance(doc.get(MANAGED_KEY), dict) else {}
         managed["last_refresh_time"] = datetime.now().isoformat()
         managed["refresh_status"] = RefreshStatus.FAILED.value
@@ -217,6 +232,7 @@ class CookieRepository:
         doc = await self.get(dede_user_id)
         if not doc:
             return None
+        doc = self._ensure_managed_tags(doc)
         raw = doc.get(RAW_KEY, {}) if isinstance(doc.get(RAW_KEY), dict) else {}
         if not isinstance(raw, dict):
             return doc
@@ -266,8 +282,23 @@ class CookieRepository:
         doc = await self.get(dede_user_id)
         if not doc:
             return None
+        doc = self._ensure_managed_tags(doc)
         managed = doc.get(MANAGED_KEY, {}) if isinstance(doc.get(MANAGED_KEY), dict) else {}
         managed["is_enabled"] = bool(is_enabled)
+        doc[MANAGED_KEY] = managed
+        path = self._file_path(dede_user_id)
+        async with aiofiles.open(path, "w", encoding="utf-8") as f:
+            await f.write(json.dumps(doc, ensure_ascii=False, indent=2))
+        return doc
+
+    async def update_tags(self, dede_user_id: str, tags: List[str]) -> Optional[Dict[str, Any]]:
+        """更新账号标签列表。"""
+        doc = await self.get(dede_user_id)
+        if not doc:
+            return None
+        doc = self._ensure_managed_tags(doc)
+        managed = doc.get(MANAGED_KEY, {}) if isinstance(doc.get(MANAGED_KEY), dict) else {}
+        managed["tags"] = list(tags)
         doc[MANAGED_KEY] = managed
         path = self._file_path(dede_user_id)
         async with aiofiles.open(path, "w", encoding="utf-8") as f:

@@ -287,6 +287,7 @@ def _build_managed_for_v2(raw_v2: Dict[str, Any], legacy: Dict[str, Any]) -> Dic
         "is_enabled": bool(legacy.get("is_enabled", True)),
         "status": _map_status(legacy.get("status"), legacy.get("cookie_valid")),
         "username": username_out,
+        "tags": [],
     }
     return managed
 

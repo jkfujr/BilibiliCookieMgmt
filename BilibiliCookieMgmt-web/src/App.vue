@@ -1,7 +1,8 @@
 <script setup>
-import { ref, computed, onMounted, watch, nextTick } from 'vue'
+import { ref, computed, onMounted, nextTick } from 'vue'
 import axios from 'axios'
 import QRCode from 'qrcode'
+import { extractAvailableTags, filterAccountsByTags, getAccountTags, normalizeTagList } from './accountTagUtils'
 
 // State
 const drawer = ref(true)
@@ -28,6 +29,7 @@ const qrDialog = ref(false)
 const cookieDialog = ref(false)
 const testCookieDialog = ref(false)
 const deleteDialog = ref(false)
+const tagDialog = ref(false)
 
 // Dialog Data
 const qrCodeCanvas = ref(null)
@@ -37,12 +39,24 @@ const currentCookie = ref({ simple: '', complete: '' })
 const testCookieInput = ref('')
 const deleteTarget = ref(null)
 const currentCookieTab = ref('simple')
+const tagTarget = ref(null)
+const tagEditorInput = ref([])
+const selectedTags = ref([])
+const tagMatchMode = ref('any')
+
+const availableTags = computed(() => {
+  return extractAvailableTags(accounts.value)
+})
+
+const filteredAccounts = computed(() => {
+  return filterAccountsByTags(accounts.value, selectedTags.value, tagMatchMode.value)
+})
 
 // Stats
 const stats = computed(() => {
-  const total = accounts.value.length
+  const total = filteredAccounts.value.length
   let valid = 0, expired = 0, invalid = 0
-  accounts.value.forEach(acc => {
+  filteredAccounts.value.forEach(acc => {
     const status = acc.managed?.status || 'unknown'
     if (status === 'valid') valid++
     else if (status === 'expired') expired++
@@ -54,6 +68,7 @@ const stats = computed(() => {
 // Table Headers
 const headers = [
   { title: '用户信息', key: 'user_info', align: 'start', sortable: false },
+  { title: '标签', key: 'tags', align: 'start', sortable: false },
   { title: '是否启用', key: 'is_enabled', align: 'center' },
   { title: '更新时间', key: 'managed.update_time', align: 'center' },
   { title: '过期时间', key: 'expire_time', align: 'center' },
@@ -93,6 +108,19 @@ const formatTime = (value) => {
   const date = new Date(typeof value === 'number' && value < 1e12 ? value * 1000 : value)
   if (isNaN(date.getTime())) return ''
   return date.toLocaleString()
+}
+
+const replaceAccount = (updatedDoc) => {
+  const dedeUserID = updatedDoc?.managed?.DedeUserID
+  if (!dedeUserID) return
+  const index = accounts.value.findIndex(acc => acc.managed?.DedeUserID === dedeUserID)
+  if (index === -1) return
+  accounts.value.splice(index, 1, updatedDoc)
+}
+
+const clearTagFilter = () => {
+  selectedTags.value = []
+  tagMatchMode.value = 'any'
 }
 
 // Methods
@@ -210,6 +238,33 @@ const toggleEnabled = async (item) => {
   } catch (err) {
     item.managed.is_enabled = !newValue
     showMsg('状态切换失败', 'error')
+  }
+}
+
+const openTagDialog = (item) => {
+  tagTarget.value = item
+  tagEditorInput.value = getAccountTags(item)
+  tagDialog.value = true
+}
+
+const closeTagDialog = () => {
+  tagDialog.value = false
+  tagTarget.value = null
+  tagEditorInput.value = []
+}
+
+const saveTags = async () => {
+  const dedeUserID = tagTarget.value?.managed?.DedeUserID
+  if (!dedeUserID) return
+
+  try {
+    const tags = normalizeTagList(tagEditorInput.value)
+    const res = await api.patch(`/v1/cookies/${dedeUserID}/tags`, { tags })
+    replaceAccount(res.data)
+    showMsg(tags.length ? '账号标签已更新' : '账号标签已清空')
+    closeTagDialog()
+  } catch (err) {
+    showMsg('标签更新失败', 'error')
   }
 }
 
@@ -438,9 +493,43 @@ onMounted(() => {
           </v-col>
         </v-row>
 
+        <v-card elevation="2" class="mb-6">
+          <v-card-text class="pb-2">
+            <v-row align="center">
+              <v-col cols="12" md="7">
+                <v-autocomplete
+                  v-model="selectedTags"
+                  :items="availableTags"
+                  label="按标签筛选"
+                  placeholder="选择一个或多个标签"
+                  multiple
+                  chips
+                  closable-chips
+                  clearable
+                  variant="outlined"
+                  density="comfortable"
+                  hide-details
+                  no-data-text="暂无可选标签"
+                ></v-autocomplete>
+              </v-col>
+              <v-col cols="12" md="3">
+                <v-btn-toggle v-model="tagMatchMode" color="primary" mandatory divided class="w-100">
+                  <v-btn value="any">任一匹配</v-btn>
+                  <v-btn value="all">全部匹配</v-btn>
+                </v-btn-toggle>
+              </v-col>
+              <v-col cols="12" md="2" class="d-flex justify-end">
+                <v-btn variant="text" color="primary" :disabled="!selectedTags.length && tagMatchMode === 'any'" @click="clearTagFilter">
+                  清空筛选
+                </v-btn>
+              </v-col>
+            </v-row>
+          </v-card-text>
+        </v-card>
+
         <!-- 数据表格 -->
         <v-card elevation="2">
-          <v-data-table :headers="headers" :items="accounts" :loading="loading" hover density="compact">
+          <v-data-table :headers="headers" :items="filteredAccounts" :loading="loading" hover density="compact">
             <!-- 用户信息列 -->
             <template v-slot:item.user_info="{ item, index }">
               <div class="d-flex flex-row align-center py-1">
@@ -451,6 +540,23 @@ onMounted(() => {
                   <div class="text-body-2 font-weight-bold lh-1">{{ screenshotMode ? `你好 ${index + 1}` : (item.managed?.username || '未知用户') }}</div>
                   <div class="text-caption text-grey-darken-1 font-monospace lh-1" style="font-size: 0.7rem;">{{ screenshotMode ? 114514 : item.managed?.DedeUserID }}</div>
                 </div>
+              </div>
+            </template>
+
+            <template v-slot:item.tags="{ item }">
+              <div class="d-flex flex-wrap ga-1 py-2">
+                <v-chip
+                  v-for="tag in getAccountTags(item)"
+                  :key="`${item.managed?.DedeUserID}-${tag}`"
+                  color="info"
+                  size="x-small"
+                  variant="tonal"
+                >
+                  {{ tag }}
+                </v-chip>
+                <v-chip v-if="!getAccountTags(item).length" color="grey" size="x-small" variant="outlined">
+                  未打标签
+                </v-chip>
               </div>
             </template>
 
@@ -512,6 +618,7 @@ onMounted(() => {
             <!-- 操作按钮 -->
             <template v-slot:item.actions="{ item }">
               <div class="d-flex justify-center">
+                <v-btn icon="mdi-tag-edit-outline" variant="text" size="x-small" color="info" @click="openTagDialog(item)" title="编辑标签"></v-btn>
                 <v-btn icon="mdi-eye-outline" variant="text" size="x-small" color="grey-darken-1" @click="viewCookie(item)" title="查看详情"></v-btn>
                 <v-btn icon="mdi-shield-check-outline" variant="text" size="x-small" color="primary" @click="checkCookie(item)" title="即时检查"></v-btn>
                 <v-btn icon="mdi-refresh" variant="text" size="x-small" color="warning" @click="refreshCookie(item)" title="强制刷新"></v-btn>
@@ -523,8 +630,9 @@ onMounted(() => {
             <template v-slot:no-data>
               <v-sheet class="pa-12 text-center" color="transparent">
                 <v-icon size="64" color="grey-lighten-1" icon="mdi-account-off-outline" class="mb-4"></v-icon>
-                <div class="text-h6 text-grey">暂无已保存的账号</div>
-                <v-btn color="primary" class="mt-4" prepend-icon="mdi-plus" @click="startScan">添加首个账号</v-btn>
+                <div class="text-h6 text-grey">{{ selectedTags.length ? '当前筛选条件下没有账号' : '暂无已保存的账号' }}</div>
+                <v-btn v-if="selectedTags.length" color="primary" class="mt-4" prepend-icon="mdi-filter-off-outline" @click="clearTagFilter">清空筛选</v-btn>
+                <v-btn v-else color="primary" class="mt-4" prepend-icon="mdi-plus" @click="startScan">添加首个账号</v-btn>
               </v-sheet>
             </template>
           </v-data-table>
@@ -591,6 +699,35 @@ onMounted(() => {
         <v-card-actions>
           <v-spacer></v-spacer>
           <v-btn color="primary" @click="cookieDialog = false">完成</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
+    <v-dialog v-model="tagDialog" max-width="560" @after-leave="closeTagDialog">
+      <v-card prepend-icon="mdi-tag-multiple-outline" title="编辑账号标签">
+        <v-card-text>
+          <div class="text-body-2 mb-4">
+            为账号 <span class="font-weight-bold">{{ tagTarget?.managed?.username || tagTarget?.managed?.DedeUserID }}</span> 设置标签。
+          </div>
+          <v-combobox
+            v-model="tagEditorInput"
+            :items="availableTags"
+            label="账号标签"
+            placeholder="输入标签后按回车确认"
+            hint="留空后保存即可清空标签"
+            persistent-hint
+            multiple
+            chips
+            closable-chips
+            clearable
+            variant="outlined"
+            auto-select-first
+          ></v-combobox>
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer></v-spacer>
+          <v-btn color="grey" variant="text" @click="closeTagDialog">取消</v-btn>
+          <v-btn color="primary" variant="flat" prepend-icon="mdi-content-save-outline" @click="saveTags">保存标签</v-btn>
         </v-card-actions>
       </v-card>
     </v-dialog>

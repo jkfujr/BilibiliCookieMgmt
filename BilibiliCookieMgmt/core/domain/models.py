@@ -4,9 +4,9 @@ from __future__ import annotations
 Cookie 状态、刷新状态、管理信息结构
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from datetime import datetime
 
 
@@ -37,6 +37,7 @@ class ManagedInfo:
     is_enabled: bool = True
     status: CookieStatus = CookieStatus.UNKNOWN
     username: Optional[str] = None
+    tags: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -50,4 +51,5 @@ class ManagedInfo:
             "is_enabled": self.is_enabled,
             "status": self.status.value,
             "username": self.username,
+            "tags": list(self.tags),
         }
