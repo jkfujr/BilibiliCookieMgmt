@@ -155,6 +155,23 @@ def _to_iso(ts: Optional[int | float | str]) -> Optional[str]:
         return None
 
 
+def _to_optional_int(value: object) -> Optional[int]:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        value = value.strip()
+        if not value:
+            return None
+        return int(value)
+    return None
+
+
 def _build_v2_like_raw(raw_v1: Dict[str, Any]) -> Dict[str, Any]:
     """将 v1 原始 JSON 转换为更贴近原生 v2 的 raw 结构。"""
     token_info = raw_v1.get("token_info", {}) or {}
@@ -163,7 +180,7 @@ def _build_v2_like_raw(raw_v1: Dict[str, Any]) -> Dict[str, Any]:
     # 提取 mid(优先 token_info.mid, 其次 DedeUserID)
     mid: Optional[int] = None
     try:
-        mid = int(token_info.get("mid")) if token_info.get("mid") is not None else None
+        mid = _to_optional_int(token_info.get("mid"))
     except Exception:
         mid = None
     if mid is None:
@@ -171,7 +188,7 @@ def _build_v2_like_raw(raw_v1: Dict[str, Any]) -> Dict[str, Any]:
             cookies = cookie_info.get("cookies", [])
             for c in cookies:
                 if isinstance(c, dict) and c.get("name") == "DedeUserID":
-                    mid = int(c.get("value"))
+                    mid = _to_optional_int(c.get("value"))
                     break
         except Exception:
             mid = None

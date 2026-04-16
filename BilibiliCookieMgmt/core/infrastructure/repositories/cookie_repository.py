@@ -63,7 +63,18 @@ class CookieRepository:
     def _extract_cookie_map(raw: Dict[str, Any]) -> Dict[str, str]:
         """从原始响应中提取 cookie 名称到值的映射。"""
         cookies = raw.get("cookie_info", {}).get("cookies", [])
-        return {c.get("name"): c.get("value") for c in cookies if isinstance(c, dict)}
+        result: Dict[str, str] = {}
+        for cookie in cookies:
+            if not isinstance(cookie, dict):
+                continue
+
+            name = cookie.get("name")
+            if name is None:
+                continue
+
+            value = cookie.get("value")
+            result[str(name)] = "" if value is None else str(value)
+        return result
 
     @staticmethod
     def _build_header_string(cookie_map: Dict[str, str]) -> str:

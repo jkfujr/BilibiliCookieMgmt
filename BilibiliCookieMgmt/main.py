@@ -89,20 +89,22 @@ def create_app() -> FastAPI:
     # 主页
     base_dir = Path(__file__).resolve().parent
     static_dir = base_dir / "static"
-    if static_dir.exists() and static_dir.is_dir():
-        app.mount("/assets", StaticFiles(directory=str(static_dir / "assets")), name="assets")
-        app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+    assets_dir = static_dir / "assets"
+    index_file = static_dir / "index.html"
 
-        @app.get("/", include_in_schema=False)
-        async def index_page():
-            index_file = static_dir / "index.html"
-            if index_file.exists():
-                return FileResponse(str(index_file))
-            return {"status": "ok", "message": "Backend is running. Frontend static files not found."}
+    if static_dir.exists() and static_dir.is_dir():
+        if assets_dir.exists() and assets_dir.is_dir():
+            app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
+        app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+        root_message = "Backend is running. Frontend static files not found."
     else:
-        @app.get("/", include_in_schema=False)
-        async def index_page():
-            return {"status": "ok", "message": "Backend is running. Frontend static files directory not found."}
+        root_message = "Backend is running. Frontend static files directory not found."
+
+    @app.get("/", include_in_schema=False)
+    async def index_page():
+        if index_file.exists():
+            return FileResponse(str(index_file))
+        return {"status": "ok", "message": root_message}
 
     return app
 

@@ -192,6 +192,28 @@ class RepositoryTagTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(cleared)
         self.assertEqual(cleared["managed"]["tags"], [])
 
+    async def test_extract_cookie_map_normalizes_to_string_dict(self) -> None:
+        cookie_map = self.repo._extract_cookie_map(
+            {
+                "cookie_info": {
+                    "cookies": [
+                        {"name": "DedeUserID", "value": 1001},
+                        {"name": 2002, "value": None},
+                        {"value": "missing-name"},
+                        "invalid-cookie",
+                    ]
+                }
+            }
+        )
+
+        self.assertEqual(
+            cookie_map,
+            {
+                "DedeUserID": "1001",
+                "2002": "",
+            },
+        )
+
     async def test_legacy_document_without_tags_is_rejected(self) -> None:
         legacy_doc = {
             "raw": build_raw("1002"),
@@ -359,6 +381,25 @@ class ApiTagTests(unittest.TestCase):
 
 
 class MigrationScriptTests(unittest.TestCase):
+    def test_build_v2_like_raw_extracts_mid_from_token_or_cookie(self) -> None:
+        module = load_migrate_module()
+
+        from_token = module._build_v2_like_raw(
+            {
+                "token_info": {"mid": "7001"},
+                "cookie_info": {"cookies": [{"name": "DedeUserID", "value": "7999"}]},
+            }
+        )
+        self.assertEqual(from_token["mid"], 7001)
+
+        from_cookie = module._build_v2_like_raw(
+            {
+                "token_info": {},
+                "cookie_info": {"cookies": [{"name": "DedeUserID", "value": "7002"}]},
+            }
+        )
+        self.assertEqual(from_cookie["mid"], 7002)
+
     def test_migrate_outputs_current_managed_structure(self) -> None:
         module = load_migrate_module()
         with tempfile.TemporaryDirectory() as temp_dir:
