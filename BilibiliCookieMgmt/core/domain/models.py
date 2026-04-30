@@ -29,6 +29,7 @@ class ManagedInfo:
     """Cookie 管理信息"""
     DedeUserID: str
     update_time: datetime
+    join_time: datetime
     last_check_time: Optional[datetime] = None
     last_refresh_time: Optional[datetime] = None
     refresh_status: RefreshStatus = RefreshStatus.NOT_NEEDED
@@ -43,6 +44,7 @@ class ManagedInfo:
         return {
             "DedeUserID": self.DedeUserID,
             "update_time": self.update_time.isoformat(),
+            "join_time": self.join_time.isoformat(),
             "last_check_time": self.last_check_time.isoformat() if self.last_check_time else None,
             "last_refresh_time": self.last_refresh_time.isoformat() if self.last_refresh_time else None,
             "refresh_status": self.refresh_status.value,

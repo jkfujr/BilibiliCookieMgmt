@@ -42,6 +42,7 @@ class CookieRepository:
 
         dede_user_id = managed.get("DedeUserID")
         header_string = managed.get("header_string")
+        join_time = managed.get("join_time")
         is_enabled = managed.get("is_enabled")
         status = managed.get("status")
         tags = managed.get("tags")
@@ -50,6 +51,8 @@ class CookieRepository:
             raise ValueError("Cookie managed.DedeUserID 非法")
         if not isinstance(header_string, str) or not header_string.strip():
             raise ValueError("Cookie managed.header_string 非法")
+        if not isinstance(join_time, str) or not join_time.strip():
+            raise ValueError("Cookie managed.join_time 非法")
         if not isinstance(is_enabled, bool):
             raise ValueError("Cookie managed.is_enabled 非法")
         if not isinstance(status, str) or status not in {item.value for item in CookieStatus}:
@@ -59,15 +62,49 @@ class CookieRepository:
 
         return doc
 
-    async def _fill_missing_tags(self, doc: Dict[str, Any], path: str) -> Dict[str, Any]:
-        managed = doc.get(MANAGED_KEY)
-        if not isinstance(managed, dict) or "tags" in managed:
-            return doc
+    @staticmethod
+    def _get_file_time(path: str) -> datetime:
+        stat = os.stat(path)
+        timestamp = getattr(stat, "st_birthtime", None)
+        if timestamp is None:
+            timestamp = stat.st_ctime if os.name == "nt" else stat.st_mtime
+        return datetime.fromtimestamp(timestamp)
 
-        managed["tags"] = []
-        doc[MANAGED_KEY] = managed
+    async def _persist_doc(self, doc: Dict[str, Any], path: str) -> None:
         async with aiofiles.open(path, "w", encoding="utf-8") as f:
             await f.write(json.dumps(doc, ensure_ascii=False, indent=2))
+
+    async def _get_existing_join_time(self, path: str) -> datetime:
+        try:
+            async with aiofiles.open(path, "r", encoding="utf-8") as f:
+                content = await f.read()
+            doc = json.loads(content)
+            managed = doc.get(MANAGED_KEY, {}) if isinstance(doc, dict) else {}
+            join_time = managed.get("join_time") if isinstance(managed, dict) else None
+            if isinstance(join_time, str) and join_time.strip():
+                return datetime.fromisoformat(join_time)
+        except Exception:
+            pass
+        return self._get_file_time(path)
+
+    async def _fill_missing_managed_fields(self, doc: Dict[str, Any], path: str) -> Dict[str, Any]:
+        managed = doc.get(MANAGED_KEY)
+        if not isinstance(managed, dict):
+            return doc
+
+        changed = False
+        if "tags" not in managed:
+            managed["tags"] = []
+            changed = True
+        if "join_time" not in managed:
+            managed["join_time"] = self._get_file_time(path).isoformat()
+            changed = True
+
+        if not changed:
+            return doc
+
+        doc[MANAGED_KEY] = managed
+        await self._persist_doc(doc, path)
         return doc
 
     @staticmethod
@@ -111,10 +148,13 @@ class CookieRepository:
             raise ValueError("原始响应缺少 DedeUserID, 无法确定文件名")
 
         header_str = self._build_header_string(cookie_map)
+        file_path = self._file_path(dede_user_id)
+        join_time_dt = await self._get_existing_join_time(file_path) if os.path.exists(file_path) else datetime.now()
 
         managed = ManagedInfo(
             DedeUserID=dede_user_id,
             update_time=datetime.now(),
+            join_time=join_time_dt,
             last_check_time=None,
             last_refresh_time=None,
             refresh_status=RefreshStatus.NOT_NEEDED,
@@ -131,9 +171,7 @@ class CookieRepository:
             MANAGED_KEY: managed.to_dict(),
         }
 
-        file_path = self._file_path(dede_user_id)
-        async with aiofiles.open(file_path, "w", encoding="utf-8") as f:
-            await f.write(json.dumps(doc, ensure_ascii=False, indent=2))
+        await self._persist_doc(doc, file_path)
 
         return self._validate_doc(doc)
 
@@ -146,7 +184,7 @@ class CookieRepository:
                 content = await f.read()
                 doc = json.loads(content)
                 if isinstance(doc, dict):
-                    doc = await self._fill_missing_tags(doc, path)
+                    doc = await self._fill_missing_managed_fields(doc, path)
                 return self._validate_doc(doc)
         except json.JSONDecodeError:
             return None

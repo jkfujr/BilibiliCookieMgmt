@@ -51,6 +51,7 @@ const headers = [
   { title: '用户信息', key: 'user_info', align: 'start', sortable: false },
   { title: '标签', key: 'tags', align: 'start', sortable: false },
   { title: '是否启用', key: 'is_enabled', align: 'center' },
+  { title: '加入时间', key: 'managed.join_time', align: 'center' },
   { title: '更新时间', key: 'managed.update_time', align: 'center' },
   { title: '过期时间', key: 'expire_time', align: 'center' },
   { title: '登录状态', key: 'managed.status', align: 'center' },
@@ -156,6 +157,10 @@ const getStatusDisplay = (status) => {
         class="scale-08"
         @update:model-value="emit('toggle-enabled', item)"
       ></v-switch>
+    </template>
+
+    <template #item.managed.join_time="{ item }">
+      <div class="text-caption">{{ formatTime(item.managed?.join_time) }}</div>
     </template>
 
     <template #item.managed.update_time="{ item }">

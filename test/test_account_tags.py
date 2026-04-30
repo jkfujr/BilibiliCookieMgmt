@@ -180,10 +180,12 @@ class RepositoryTagTests(unittest.IsolatedAsyncioTestCase):
     async def test_default_tags_and_update_clear(self) -> None:
         saved = await self.repo.save_from_raw(build_raw("1001"))
         self.assertEqual(saved["managed"]["tags"], [])
+        self.assertTrue(saved["managed"]["join_time"])
 
         updated = await self.repo.update_tags("1001", ["主力号", "直播"])
         self.assertIsNotNone(updated)
         self.assertEqual(updated["managed"]["tags"], ["主力号", "直播"])
+        self.assertEqual(updated["managed"]["join_time"], saved["managed"]["join_time"])
 
         stored_doc = json.loads((self.cookie_dir / "1001.json").read_text(encoding="utf-8"))
         self.assertEqual(stored_doc["managed"]["tags"], ["主力号", "直播"])
@@ -191,6 +193,16 @@ class RepositoryTagTests(unittest.IsolatedAsyncioTestCase):
         cleared = await self.repo.update_tags("1001", [])
         self.assertIsNotNone(cleared)
         self.assertEqual(cleared["managed"]["tags"], [])
+        self.assertEqual(cleared["managed"]["join_time"], saved["managed"]["join_time"])
+
+    async def test_join_time_is_created_and_preserved_on_resave(self) -> None:
+        saved = await self.repo.save_from_raw(build_raw("1101", prefix="first"))
+        join_time = saved["managed"]["join_time"]
+
+        resaved = await self.repo.save_from_raw(build_raw("1101", prefix="second"))
+
+        self.assertEqual(resaved["managed"]["join_time"], join_time)
+        self.assertIn("second-sess-1101", resaved["managed"]["header_string"])
 
     async def test_extract_cookie_map_normalizes_to_string_dict(self) -> None:
         cookie_map = self.repo._extract_cookie_map(
@@ -230,14 +242,18 @@ class RepositoryTagTests(unittest.IsolatedAsyncioTestCase):
                 "username": None,
             },
         }
-        (self.cookie_dir / "1002.json").write_text(json.dumps(legacy_doc, ensure_ascii=False), encoding="utf-8")
+        legacy_path = self.cookie_dir / "1002.json"
+        legacy_path.write_text(json.dumps(legacy_doc, ensure_ascii=False), encoding="utf-8")
+        expected_join_time = self.repo._get_file_time(str(legacy_path)).isoformat()
 
         doc = await self.repo.get("1002")
         self.assertIsNotNone(doc)
         self.assertEqual(doc["managed"]["tags"], [])
+        self.assertEqual(doc["managed"]["join_time"], expected_join_time)
 
-        stored_doc = json.loads((self.cookie_dir / "1002.json").read_text(encoding="utf-8"))
+        stored_doc = json.loads(legacy_path.read_text(encoding="utf-8"))
         self.assertEqual(stored_doc["managed"]["tags"], [])
+        self.assertEqual(stored_doc["managed"]["join_time"], doc["managed"]["join_time"])
 
     async def test_legacy_document_with_invalid_tags_value_is_rejected(self) -> None:
         legacy_doc = {
@@ -260,6 +276,27 @@ class RepositoryTagTests(unittest.IsolatedAsyncioTestCase):
 
         with self.assertRaisesRegex(ValueError, "managed.tags"):
             await self.repo.get("1003")
+
+    async def test_join_time_survives_status_refresh_enabled_and_tag_updates(self) -> None:
+        saved = await self.repo.save_from_raw(build_raw("1004"))
+        join_time = saved["managed"]["join_time"]
+
+        checked = await self.repo.update_check_status("1004", valid=True, username="用户1004")
+        self.assertEqual(checked["managed"]["join_time"], join_time)
+
+        refreshed = await self.repo.update_on_refresh(
+            "1004",
+            {"access_token": "new-access-1004", "refresh_token": "new-refresh-1004", "expires_in": 3600},
+            build_raw("1004", prefix="new")["cookie_info"],
+            ts=1700000000,
+        )
+        self.assertEqual(refreshed["managed"]["join_time"], join_time)
+
+        disabled = await self.repo.update_enabled("1004", False)
+        self.assertEqual(disabled["managed"]["join_time"], join_time)
+
+        tagged = await self.repo.update_tags("1004", ["备用"])
+        self.assertEqual(tagged["managed"]["join_time"], join_time)
 
 
 class ServiceTagTests(unittest.IsolatedAsyncioTestCase):
@@ -319,7 +356,9 @@ class ApiTagTests(unittest.TestCase):
         self.assertEqual(list_response.status_code, 200)
         items = {item["managed"]["DedeUserID"]: item for item in list_response.json()}
         self.assertEqual(items["3001"]["managed"]["tags"], ["主力号", "直播"])
+        self.assertTrue(items["3001"]["managed"]["join_time"])
         self.assertEqual(items["3002"]["managed"]["tags"], [])
+        self.assertTrue(items["3002"]["managed"]["join_time"])
 
     def test_patch_tags_supports_clear_and_missing_account(self) -> None:
         set_response = self.client.patch(
@@ -378,6 +417,7 @@ class ApiTagTests(unittest.TestCase):
         cookie_doc = cookie_response.json()
         self.assertEqual(cookie_doc["managed"]["tags"], ["主力号", "直播"])
         self.assertEqual(cookie_doc["managed"]["status"], "valid")
+        self.assertTrue(cookie_doc["managed"]["join_time"])
 
     def test_legacy_document_without_tags_is_filled_by_api(self) -> None:
         legacy_doc = {
@@ -400,9 +440,11 @@ class ApiTagTests(unittest.TestCase):
         response = self.client.get("/api/v1/cookies/3999", headers=self.auth_headers)
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["managed"]["tags"], [])
+        self.assertTrue(response.json()["managed"]["join_time"])
 
         stored_doc = json.loads((self.cookie_dir / "3999.json").read_text(encoding="utf-8"))
         self.assertEqual(stored_doc["managed"]["tags"], [])
+        self.assertEqual(stored_doc["managed"]["join_time"], response.json()["managed"]["join_time"])
 
 
 class MigrationScriptTests(unittest.TestCase):
@@ -433,10 +475,12 @@ class MigrationScriptTests(unittest.TestCase):
             dst_dir = root / "dst"
             src_dir.mkdir(parents=True, exist_ok=True)
             legacy_uid = "5001"
-            (src_dir / f"{legacy_uid}.json").write_text(
+            legacy_path = src_dir / f"{legacy_uid}.json"
+            legacy_path.write_text(
                 json.dumps(build_legacy_raw(legacy_uid), ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
+            expected_join_time = module._file_time_iso(legacy_path)
 
             result = asyncio.run(
                 module.migrate(
@@ -455,6 +499,7 @@ class MigrationScriptTests(unittest.TestCase):
             migrated_doc = json.loads((dst_dir / f"{legacy_uid}.json").read_text(encoding="utf-8"))
             managed = migrated_doc["managed"]
             self.assertEqual(managed["DedeUserID"], legacy_uid)
+            self.assertEqual(managed["join_time"], expected_join_time)
             self.assertEqual(managed["tags"], [])
             self.assertTrue(managed["header_string"].startswith("SESSDATA="))
             self.assertEqual(managed["status"], "valid")

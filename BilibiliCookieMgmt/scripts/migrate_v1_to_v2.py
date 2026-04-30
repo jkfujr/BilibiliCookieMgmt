@@ -90,7 +90,15 @@ def _extract_dede_user_id(raw: Dict[str, Any]) -> Optional[str]:
     return str(v) if v is not None else None
 
 
-async def _save_with_repo(raw: Dict[str, Any], dst_dir: Path) -> Tuple[bool, Optional[str], Optional[Path], Optional[str]]:
+def _file_time_iso(file_path: Path) -> str:
+    stat = file_path.stat()
+    timestamp = getattr(stat, "st_birthtime", None)
+    if timestamp is None:
+        timestamp = stat.st_ctime if os.name == "nt" else stat.st_mtime
+    return datetime.fromtimestamp(timestamp).isoformat()
+
+
+async def _save_with_repo(raw: Dict[str, Any], dst_dir: Path, join_time: Optional[str] = None) -> Tuple[bool, Optional[str], Optional[Path], Optional[str]]:
     """
     使用当前后端仓库保存为两段式文档。
     返回: (ok, dede_user_id, target_path, error)
@@ -108,6 +116,11 @@ async def _save_with_repo(raw: Dict[str, Any], dst_dir: Path) -> Tuple[bool, Opt
         info = doc.get("managed", {}) if isinstance(doc.get("managed"), dict) else {}
         dede_user_id = info.get("DedeUserID")
         target_path = Path(repo._file_path(str(dede_user_id)))  # 私有方法, 脚本内使用允许
+        if join_time and isinstance(info, dict):
+            info["join_time"] = join_time
+            doc["managed"] = info
+            with open(target_path, "w", encoding="utf-8") as f:
+                json.dump(doc, f, ensure_ascii=False, indent=2)
         return True, str(dede_user_id), target_path, None
     except Exception as e:
         return False, None, None, f"保存失败: {e}"
@@ -214,7 +227,7 @@ def _build_v2_like_raw(raw_v1: Dict[str, Any]) -> Dict[str, Any]:
     return raw_v2
 
 
-def _build_managed_for_v2(raw_v2: Dict[str, Any], legacy: Dict[str, Any]) -> Dict[str, Any]:
+def _build_managed_for_v2(raw_v2: Dict[str, Any], legacy: Dict[str, Any], join_time: Optional[str] = None) -> Dict[str, Any]:
     """根据 v2 raw 与 v1 的 _cookiemgmt 构建 managed 字段。"""
     # 复用仓库的静态方法生成 header_string
     # 注意: 这里不调用 save_from_raw, 避免在 raw 中保留 _cookiemgmt
@@ -294,6 +307,7 @@ def _build_managed_for_v2(raw_v2: Dict[str, Any], legacy: Dict[str, Any]) -> Dic
     managed = {
         "DedeUserID": dede_user_id or "",
         "update_time": _to_iso(legacy.get("update_time")) or datetime.now().isoformat(),
+        "join_time": join_time or datetime.now().isoformat(),
         "last_check_time": _to_iso(legacy.get("last_check_time")),
         "last_refresh_time": _to_iso(legacy.get("last_refresh_time")) or datetime.now().isoformat(),
         "refresh_status": _map_refresh(legacy.get("refresh_status")),
@@ -333,6 +347,8 @@ async def migrate(src_dir: Path, dst_dir: Path, ids: Optional[List[str]] = None,
             skipped += 1
             continue
 
+        join_time = _file_time_iso(fp)
+
         if dry_run:
             # 仅预览
             print(f"[DRY-RUN] {fp.name} -> {target_path}")
@@ -342,7 +358,7 @@ async def migrate(src_dir: Path, dst_dir: Path, ids: Optional[List[str]] = None,
                 # 构建 v2-like raw 与 managed, 并直接写入文件
                 legacy = raw.get("_cookiemgmt", {}) if isinstance(raw.get("_cookiemgmt", {}), dict) else {}
                 raw_v2 = _build_v2_like_raw(raw)
-                managed = _build_managed_for_v2(raw_v2, legacy)
+                managed = _build_managed_for_v2(raw_v2, legacy, join_time)
                 doc = {"raw": raw_v2, "managed": managed}
                 try:
                     with open(target_path, "w", encoding="utf-8") as f:
@@ -353,7 +369,7 @@ async def migrate(src_dir: Path, dst_dir: Path, ids: Optional[List[str]] = None,
                     errors.append({"file": str(fp), "error": f"写入失败: {e}"})
                     continue
             else:
-                ok, uid, out_path, err = await _save_with_repo(raw, dst_dir)
+                ok, uid, out_path, err = await _save_with_repo(raw, dst_dir, join_time)
                 if not ok:
                     errors.append({"file": str(fp), "error": err or "未知错误"})
                     continue
