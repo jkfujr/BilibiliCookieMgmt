@@ -24,8 +24,9 @@ MANAGED_KEY = "managed"
 class CookieRepository:
     """文件系统实现的 Cookie 仓库。"""
 
-    def __init__(self, base_dir: str):
+    def __init__(self, base_dir: str, bili_ticket_enabled: bool = False):
         self.base_dir = base_dir
+        self.bili_ticket_enabled = bili_ticket_enabled
         os.makedirs(self.base_dir, exist_ok=True)
 
     def _file_path(self, dede_user_id: str) -> str:
@@ -125,10 +126,14 @@ class CookieRepository:
         return result
 
     @staticmethod
-    def _build_header_string(cookie_map: Dict[str, str]) -> str:
+    def _build_header_string(cookie_map: Dict[str, str], bili_ticket_enabled: bool = False) -> str:
         """构建 HTTP Cookie 头字符串。缺失键使用空字符串填充。"""
         parts = []
-        for key in ["SESSDATA", "bili_jct", "buvid3", "buvid4", "DedeUserID", "DedeUserID__ckMd5"]:
+        keys = ["SESSDATA", "bili_jct", "buvid3", "buvid4", "DedeUserID", "DedeUserID__ckMd5", "b_nut"]
+        if bili_ticket_enabled:
+            keys.append("bili_ticket")
+
+        for key in keys:
             val = cookie_map.get(key, "")
             parts.append(f"{key}={val}")
         return "; ".join(parts)
@@ -147,7 +152,7 @@ class CookieRepository:
         if not dede_user_id:
             raise ValueError("原始响应缺少 DedeUserID, 无法确定文件名")
 
-        header_str = self._build_header_string(cookie_map)
+        header_str = self._build_header_string(cookie_map, self.bili_ticket_enabled)
         file_path = self._file_path(dede_user_id)
         join_time_dt = await self._get_existing_join_time(file_path) if os.path.exists(file_path) else datetime.now()
 
@@ -227,6 +232,22 @@ class CookieRepository:
             await f.write(json.dumps(doc, ensure_ascii=False, indent=2))
         return self._validate_doc(doc)
 
+    async def update_risk_control(self, dede_user_id: str, risk_controlled: bool, voucher: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """更新风控检测状态到 managed 段。"""
+        doc = await self.get(dede_user_id)
+        if not doc:
+            return None
+        managed = doc.get(MANAGED_KEY, {}) if isinstance(doc.get(MANAGED_KEY), dict) else {}
+        managed["risk_controlled"] = risk_controlled
+        managed["risk_control_detected_at"] = datetime.now().isoformat()
+        managed["risk_control_checked_at"] = datetime.now().isoformat()
+        managed["risk_control_voucher"] = voucher
+        doc[MANAGED_KEY] = managed
+        path = self._file_path(dede_user_id)
+        async with aiofiles.open(path, "w", encoding="utf-8") as f:
+            await f.write(json.dumps(doc, ensure_ascii=False, indent=2))
+        return self._validate_doc(doc)
+
     async def update_on_refresh(self, dede_user_id: str, token_info: Dict[str, Any], cookie_info: Dict[str, Any], ts: Optional[int] = None) -> Optional[Dict[str, Any]]:
         """
         刷新成功后更新存储文档: 
@@ -279,10 +300,10 @@ class CookieRepository:
             await f.write(json.dumps(doc, ensure_ascii=False, indent=2))
         return self._validate_doc(doc)
 
-    async def update_buvid(self, dede_user_id: str, buvid3: Optional[str], buvid4: Optional[str]) -> Optional[Dict[str, Any]]:
+    async def update_buvid_bnut(self, dede_user_id: str, buvid3: Optional[str], buvid4: Optional[str], b_nut: Optional[str]) -> Optional[Dict[str, Any]]:
         """
-        更新原始响应中的 buvid3/buvid4 并重建 header_string。
-        buvid3/buvid4 任意为 None 时跳过对应项的更新。
+        更新原始响应中的 buvid3/buvid4/b_nut 并重建 header_string。
+        buvid3/buvid4/b_nut 任意为 None 时跳过对应项的更新。
         """
         doc = await self.get(dede_user_id)
         if not doc:
@@ -293,7 +314,7 @@ class CookieRepository:
         cookie_info = raw.get("cookie_info", {})
         cookies = cookie_info.get("cookies", [])
 
-        # 更新或追加 buvid3/4
+        # 更新或追加 buvid3/4/b_nut
         def upsert_cookie(name: str, value: str):
             found = False
             for c in cookies:
@@ -314,15 +335,66 @@ class CookieRepository:
             upsert_cookie("buvid3", buvid3)
         if buvid4:
             upsert_cookie("buvid4", buvid4)
+        if b_nut:
+            upsert_cookie("b_nut", b_nut)
 
         raw.setdefault("cookie_info", {})["cookies"] = cookies
 
         # 重建 header_string
         cookie_map = self._extract_cookie_map(raw)
-        header_str = self._build_header_string(cookie_map)
+        header_str = self._build_header_string(cookie_map, self.bili_ticket_enabled)
 
         managed = doc.get(MANAGED_KEY, {}) if isinstance(doc.get(MANAGED_KEY), dict) else {}
         managed["header_string"] = header_str
+        doc[RAW_KEY] = raw
+        doc[MANAGED_KEY] = managed
+
+        path = self._file_path(dede_user_id)
+        async with aiofiles.open(path, "w", encoding="utf-8") as f:
+            await f.write(json.dumps(doc, ensure_ascii=False, indent=2))
+        return self._validate_doc(doc)
+
+    async def update_bili_ticket(self, dede_user_id: str, ticket: str) -> Optional[Dict[str, Any]]:
+        """更新 bili_ticket 并重建 header_string。"""
+        doc = await self.get(dede_user_id)
+        if not doc:
+            return None
+        raw = doc.get(RAW_KEY, {}) if isinstance(doc.get(RAW_KEY), dict) else {}
+        if not isinstance(raw, dict):
+            return doc
+
+        cookie_info = raw.get("cookie_info", {})
+        cookies = cookie_info.get("cookies", [])
+
+        # bili_ticket 有效期为 259260 秒（约 3 天）
+        expires_ts = int(datetime.now().timestamp()) + 259260
+
+        # 更新或追加 bili_ticket
+        found = False
+        for c in cookies:
+            if c.get("name") == "bili_ticket":
+                c["value"] = ticket
+                c["expires"] = expires_ts
+                found = True
+                break
+        if not found:
+            cookies.append({
+                "name": "bili_ticket",
+                "value": ticket,
+                "http_only": 0,
+                "expires": expires_ts,
+                "secure": 0,
+            })
+
+        raw.setdefault("cookie_info", {})["cookies"] = cookies
+
+        # 重建 header_string
+        cookie_map = self._extract_cookie_map(raw)
+        header_str = self._build_header_string(cookie_map, self.bili_ticket_enabled)
+
+        managed = doc.get(MANAGED_KEY, {}) if isinstance(doc.get(MANAGED_KEY), dict) else {}
+        managed["header_string"] = header_str
+        managed["bili_ticket_refreshed_at"] = datetime.now().isoformat()
         doc[RAW_KEY] = raw
         doc[MANAGED_KEY] = managed
 

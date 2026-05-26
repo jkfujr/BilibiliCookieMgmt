@@ -38,6 +38,14 @@ class AppScheduler:
             logger.info("启动 Cookie 刷新任务")
             t = asyncio.create_task(self._loop_cookie_refresh())
             self._tasks.append(t)
+        if self.config.bili.bili_ticket_enabled:
+            logger.info("启动 bili_ticket 刷新任务")
+            t = asyncio.create_task(self._loop_bili_ticket_refresh())
+            self._tasks.append(t)
+        if self.config.bili.risk_control_enabled:
+            logger.info("启动风控检测任务")
+            t = asyncio.create_task(self._loop_risk_control_check())
+            self._tasks.append(t)
         app.state.scheduler = self
 
     async def stop(self) -> None:
@@ -71,6 +79,16 @@ class AppScheduler:
                 logger.error(f"Cookie 检查循环异常: {e}", exc_info=True)
             await asyncio.sleep(interval)
 
+    async def _loop_bili_ticket_refresh(self) -> None:
+        interval = max(60, int(self.config.scheduler.bili_ticket_refresh.interval_seconds))
+        logger.info(f"bili_ticket 刷新循环已启动, 间隔: {interval}秒")
+        while not self._stopping.is_set():
+            try:
+                await self.service.refresh_expiring_tickets()
+            except Exception as e:
+                logger.error(f"bili_ticket 刷新循环异常: {e}", exc_info=True)
+            await asyncio.sleep(interval)
+
     async def _loop_cookie_refresh(self) -> None:
         interval = max(60, int(self.config.scheduler.cookie_refresh.interval_seconds))
         logger.info(f"Cookie 刷新循环已启动, 间隔: {interval}秒")
@@ -98,4 +116,14 @@ class AppScheduler:
                         await self.service.refresh_cookie(dede_user_id)
             except Exception as e:
                 logger.error(f"Cookie 刷新循环异常: {e}", exc_info=True)
+            await asyncio.sleep(interval)
+
+    async def _loop_risk_control_check(self) -> None:
+        interval = max(60, int(self.config.scheduler.risk_control_check.interval_seconds))
+        logger.info(f"风控检测循环已启动, 间隔: {interval}秒")
+        while not self._stopping.is_set():
+            try:
+                await self.service.check_risk_control_for_all()
+            except Exception as e:
+                logger.error(f"风控检测循环异常: {e}", exc_info=True)
             await asyncio.sleep(interval)

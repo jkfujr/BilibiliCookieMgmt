@@ -4,8 +4,10 @@ from __future__ import annotations
 Bilibili 客户端
 """
 
-import time, hashlib, urllib.parse, httpx, logging
+import time, hashlib, urllib.parse, httpx, logging, hmac
 from typing import Any, Dict, Optional
+
+from ..utils.wbi import enc_wbi
 
 
 logger = logging.getLogger(__name__)
@@ -160,6 +162,37 @@ class BilibiliClient:
             logger.error(f"获取 buvid 失败: {e}")
             return None
 
+    async def fetch_b_nut(self, header_string: str) -> Optional[Dict[str, Any]]:
+        """
+        获取 b_nut 信息: GET 调用 www.bilibili.com 主站, 返回包含 b_nut、buvid3 字段的字典
+        - header_string: Cookie 请求头字符串
+        返回 dict 或 None。
+        """
+        url = "https://www.bilibili.com"
+        headers = {
+            "User-Agent": USER_AGENT,
+            "Referer": "https://www.bilibili.com/",
+            "Cookie": header_string,
+        }
+        try:
+            rsp = await self._client.get(url, headers=headers, timeout=10.0)
+            set_cookie = rsp.headers.get("set-cookie", "")
+            parsed = {}
+            for part in set_cookie.split(","):
+                for kv in part.split(";"):
+                    kv = kv.strip()
+                    if "=" not in kv:
+                        continue
+                    k, v = kv.split("=", 1)
+                    if k == "buvid3":
+                        parsed["buvid3"] = v
+                    elif k == "b_nut":
+                        parsed["b_nut"] = v
+            return parsed if parsed else None
+        except httpx.HTTPError as e:
+            logger.error(f"获取 b_nut 失败: {e}")
+            return None
+
     async def refresh_cookie(self, access_key: str, refresh_token: str) -> Dict[str, Any]:
         """
         刷新 Token/Cookie: 对应 passport.bilibili.com 的刷新接口
@@ -183,3 +216,125 @@ class BilibiliClient:
         except httpx.HTTPError as e:
             logger.error(f"刷新 Cookie 网络请求失败: {e}")
             return {"code": -1, "message": f"网络错误: {e}"}
+
+    async def get_bili_ticket(self, csrf: str = "") -> Optional[str]:
+        """
+        获取 bili_ticket (用于降低风控)
+        API: https://api.bilibili.com/bapis/bilibili.api.ticket.v1.Ticket/GenWebTicket
+        """
+        key = "XgwSnGZ1p"
+        ts = str(int(time.time()))
+        message = f"ts{ts}"
+
+        # HMAC-SHA256
+        hexsign = hmac.new(key.encode(), message.encode(), hashlib.sha256).hexdigest()
+
+        url = "https://api.bilibili.com/bapis/bilibili.api.ticket.v1.Ticket/GenWebTicket"
+        params = {
+            "key_id": "ec02",
+            "hexsign": hexsign,
+            "context[ts]": ts,
+            "csrf": csrf
+        }
+
+        try:
+            headers = {"user-agent": USER_AGENT}
+            rsp = await self._client.post(url, params=params, headers=headers)
+            data = rsp.json()
+            if data.get("code") == 0:
+                return data.get("data", {}).get("ticket")
+            else:
+                logger.warning(f"获取 bili_ticket 失败: {data}")
+        except Exception as e:
+            logger.error(f"获取 bili_ticket 异常: {e}")
+        return None
+
+    async def _get_wbi_keys(self, cookie: str = "") -> tuple[str, str]:
+        """获取 wbi 签名所需的 img_key 和 sub_key。"""
+        url = "https://api.bilibili.com/x/web-interface/nav?"
+        headers = {
+            "User-Agent": USER_AGENT,
+            "Referer": "https://www.bilibili.com/",
+        }
+        if cookie:
+            headers["Cookie"] = cookie
+        try:
+            rsp = await self._client.get(url, headers=headers, timeout=10.0)
+            data = rsp.json()
+            if data.get("code") != 0:
+                raise ValueError(f"nav 接口返回非零 code: {data.get('code')}")
+            img_url = data["data"]["wbi_img"]["img_url"]
+            sub_url = data["data"]["wbi_img"]["sub_url"]
+            img_key = img_url.rsplit("/", 1)[1].split(".")[0]
+            sub_key = sub_url.rsplit("/", 1)[1].split(".")[0]
+            return img_key, sub_key
+        except Exception as e:
+            logger.warning(f"获取 wbi keys 失败: {e}")
+            raise
+
+    async def check_risk_control(self, header_string: str, room_id: int = 5440) -> Dict[str, Any]:
+        """
+        检测账号是否被风控。
+
+        调用弹幕信息接口，通过响应头判断：
+        - bili-status-code 为 -352
+        - 存在 x-bili-gaia-vvoucher 响应键
+        同时满足任一项时认为账号可能被风控。
+
+        Parameters:
+            header_string: Cookie 请求头字符串
+            room_id: 直播间 ID（默认 5440，B站官方直播间）
+
+        Returns:
+            {
+                "risk_controlled": bool,
+                "voucher": str | None,
+                "bili_status_code": str | None,
+                "status": int,
+            }
+        """
+        url = f"https://api.live.bilibili.com/xlive/web-room/v1/index/getDanmuInfo"
+        headers = {
+            "User-Agent": USER_AGENT,
+            "Referer": "https://live.bilibili.com/",
+            "Cookie": header_string,
+        }
+        params = {"room_id": room_id}
+
+        # 获取 wbi 签名后拼接参数
+        img_key, sub_key = await self._get_wbi_keys(header_string)
+        params = enc_wbi(params, img_key, sub_key)
+
+        result: Dict[str, Any] = {
+            "risk_controlled": False,
+            "voucher": None,
+            "bili_status_code": None,
+            "status": 200,
+        }
+        try:
+            rsp = await self._client.get(url, headers=headers, params=params, timeout=10.0)
+            result["status"] = rsp.status_code
+
+            # 读取响应头中的风控标识
+            bili_status = rsp.headers.get("bili-status-code")
+            voucher = rsp.headers.get("x-bili-gaia-vvoucher")
+
+            result["bili_status_code"] = bili_status
+            result["voucher"] = voucher
+
+            if bili_status == "-352" or voucher:
+                result["risk_controlled"] = True
+                logger.warning(f"账号风控检测: bili-status-code={bili_status}, voucher={voucher[:24]}...")
+            else:
+                logger.debug(f"账号风控检测: 正常 (bili-status-code={bili_status})")
+
+        except httpx.HTTPError as e:
+            logger.error(f"风控检测网络请求失败: {e}")
+            result["status"] = -1
+            result["bili_status_code"] = str(e)
+        except Exception as e:
+            logger.error(f"风控检测异常: {e}")
+            result["status"] = -1
+            result["bili_status_code"] = str(e)
+
+        return result
