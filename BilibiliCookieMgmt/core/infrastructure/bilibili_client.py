@@ -242,9 +242,12 @@ class BilibiliClient:
                 if not ticket:
                     logger.warning("获取 bili_ticket 返回空 ticket")
                     return None
-                created_at = int(inner.get("created_at") or int(time.time()))
-                ttl = int(inner.get("ttl") or 0)
-                expires = created_at + ttl if ttl > 0 else 0
+                created_at = int(inner.get("created_at"))
+                ttl = int(inner.get("ttl"))
+                if created_at <= 0 or ttl <= 0:
+                    logger.warning(f"获取 bili_ticket 返回无效有效期: created_at={created_at}, ttl={ttl}")
+                    return None
+                expires = created_at + ttl
                 return {
                     "ticket": str(ticket),
                     "created_at": created_at,
@@ -335,6 +338,12 @@ class BilibiliClient:
 
             result["bili_status_code"] = bili_status
             result["voucher"] = voucher
+
+            if rsp.status_code < 200 or rsp.status_code >= 300:
+                result["ok"] = False
+                result["error_message"] = f"风控检测 HTTP {rsp.status_code}"
+                logger.warning(f"风控检测 HTTP 异常: status={rsp.status_code}, bili-status-code={bili_status}")
+                return result
 
             if bili_status == "-352" or voucher:
                 result["risk_controlled"] = True

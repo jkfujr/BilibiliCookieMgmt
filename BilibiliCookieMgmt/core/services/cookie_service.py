@@ -5,6 +5,7 @@ Cookie 业务服务: 封装领域规则, 仅做一件事、写干净的业务逻
 """
 
 import logging
+import copy
 from datetime import datetime
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
@@ -17,6 +18,7 @@ if TYPE_CHECKING:
 
 
 logger = logging.getLogger(__name__)
+SENSITIVE_COOKIE_NAMES = {"b_nut", "bili_ticket"}
 
 
 def _normalize_tags(tags: List[str]) -> List[str]:
@@ -53,7 +55,7 @@ class CookieService:
             )
         except Exception as e:
             logger.error(f"Cookie 创建后通知发送失败: {e}", exc_info=True)
-        result = self._prepare_api_doc(doc)
+        result = self._sanitize_api_doc(doc)
         assert result is not None, "save_from_raw 返回的文档经净化后不应为 None"
         return result
 
@@ -88,16 +90,16 @@ class CookieService:
         except Exception as e:
             logger.warning(f"扫码后置处理-首轮检查异常: {e}")
 
-        return self._prepare_api_doc(doc)
+        return self._sanitize_api_doc(doc)
 
     async def get_cookie(self, dede_user_id: str) -> Optional[Dict[str, Any]]:
-        return self._prepare_api_doc(await self.repo.get(dede_user_id))
+        return self._sanitize_api_doc(await self.repo.get(dede_user_id))
 
     async def list_cookies(self) -> List[Dict[str, Any]]:
         docs = await self.repo.list()
         result: List[Dict[str, Any]] = []
         for d in docs:
-            clean = self._prepare_api_doc(d)
+            clean = self._sanitize_api_doc(d)
             assert clean is not None
             result.append(clean)
         return result
@@ -122,8 +124,9 @@ class CookieService:
         # 检查 header_string 是否符合当前 bili_ticket 配置策略
         should_rebuild = False
         if header_string:
+            has_sensitive_cookie = self._has_sensitive_cookie_part(header_string)
             has_ticket = "bili_ticket=" in header_string
-            if not self.config.bili.bili_ticket_enabled and has_ticket:
+            if not self.config.bili.bili_ticket_enabled and has_sensitive_cookie:
                 should_rebuild = True
             elif self.config.bili.bili_ticket_enabled and not has_ticket:
                 should_rebuild = True
@@ -248,7 +251,9 @@ class CookieService:
 
         # 刷新后健康检查
         try:
-            await self.check_cookie(dede_user_id)
+            checked = await self.check_cookie(dede_user_id)
+            if checked:
+                result = checked
         except Exception:
             pass
 
@@ -377,11 +382,11 @@ class CookieService:
 
     async def set_enabled(self, dede_user_id: str, is_enabled: bool) -> Optional[Dict[str, Any]]:
         """设置启用/禁用状态(仅影响随机 Cookie 选择)。"""
-        return self._prepare_api_doc(await self.repo.update_enabled(dede_user_id, is_enabled))
+        return self._sanitize_api_doc(await self.repo.update_enabled(dede_user_id, is_enabled))
 
     async def set_tags(self, dede_user_id: str, tags: List[str]) -> Optional[Dict[str, Any]]:
         """设置账号标签。"""
-        return self._prepare_api_doc(await self.repo.update_tags(dede_user_id, _normalize_tags(tags)))
+        return self._sanitize_api_doc(await self.repo.update_tags(dede_user_id, _normalize_tags(tags)))
 
     async def _refresh_buvid_bnut(self, dede_user_id: str, header_string: str) -> Optional[Dict[str, Any]]:
         """获取并更新 buvid3/buvid4/b_nut。任一失败不影响其他字段。返回最新仓储文档或 None。"""
@@ -427,27 +432,52 @@ class CookieService:
             logger.warning(f"刷新 bili_ticket 异常: {dede_user_id}, 错误: {e}")
         return None
 
-    def _prepare_api_doc(self, doc: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    @staticmethod
+    def _strip_sensitive_cookie_parts(header_string: str) -> str:
+        parts = []
+        for part in str(header_string or "").split(";"):
+            item = part.strip()
+            if not item:
+                continue
+            name = item.split("=", 1)[0]
+            if name not in SENSITIVE_COOKIE_NAMES:
+                parts.append(item)
+        return "; ".join(parts)
+
+    @classmethod
+    def _has_sensitive_cookie_part(cls, header_string: str) -> bool:
+        return cls._strip_sensitive_cookie_parts(header_string) != str(header_string or "").strip()
+
+    def _sanitize_api_doc(self, doc: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         """当 bili_ticket_enabled 为 False 时，裁剪 API 输出中的 bili_ticket/b_nut。"""
         if not doc or self.config.bili.bili_ticket_enabled:
             return doc
         raw = doc.get(RAW_KEY, {})
-        if not isinstance(raw, dict):
+        managed = doc.get(MANAGED_KEY, {}) if isinstance(doc.get(MANAGED_KEY), dict) else {}
+        header = managed.get("header_string", "")
+
+        cookies = []
+        if isinstance(raw, dict):
+            cookie_info = raw.get("cookie_info", {})
+            if isinstance(cookie_info, dict) and isinstance(cookie_info.get("cookies"), list):
+                cookies = cookie_info["cookies"]
+
+        filtered = [
+            c for c in cookies
+            if not (isinstance(c, dict) and c.get("name") in SENSITIVE_COOKIE_NAMES)
+        ]
+        header_clean = self._strip_sensitive_cookie_parts(header)
+        cookies_changed = len(filtered) != len(cookies)
+        header_changed = header_clean != str(header or "").strip()
+
+        if not cookies_changed and not header_changed:
             return doc
-        cookie_info = raw.get("cookie_info", {})
-        cookies = cookie_info.get("cookies", [])
-        if not isinstance(cookies, list):
-            return doc
-        filtered = [c for c in cookies if isinstance(c, dict) and c.get("name") not in ("bili_ticket", "b_nut")]
-        if len(filtered) == len(cookies):
-            return doc
-        import copy
+
         result = copy.deepcopy(doc)
-        result[RAW_KEY]["cookie_info"]["cookies"] = filtered
-        header = result.get(MANAGED_KEY, {}).get("header_string", "")
-        if header:
-            parts = [p for p in header.split("; ") if not p.startswith("bili_ticket=") and not p.startswith("b_nut=")]
-            result[MANAGED_KEY]["header_string"] = "; ".join(parts)
+        if cookies_changed:
+            result[RAW_KEY]["cookie_info"]["cookies"] = filtered
+        if header_changed and isinstance(result.get(MANAGED_KEY), dict):
+            result[MANAGED_KEY]["header_string"] = header_clean
         return result
 
     @staticmethod
@@ -571,6 +601,11 @@ class CookieService:
             except Exception as e:
                 failed += 1
                 details.append({"DedeUserID": dede_user_id, "ok": False, "message": str(e)})
+                await self.repo.update_risk_control(
+                    dede_user_id,
+                    checked_ok=False,
+                    error_message=str(e),
+                )
                 logger.error(f"风控检测异常: {dede_user_id}, 错误: {e}")
 
         if total > 0:
@@ -595,7 +630,7 @@ class CookieService:
             return None
         chosen = random.choice(candidates)
         # 先净化确保 header_string 符合当前 ticket 策略
-        chosen = self._prepare_api_doc(chosen)
+        chosen = self._sanitize_api_doc(chosen)
         assert chosen is not None
         if fmt == "simple":
             info = chosen.get(MANAGED_KEY, {}) if isinstance(chosen.get(MANAGED_KEY), dict) else {}

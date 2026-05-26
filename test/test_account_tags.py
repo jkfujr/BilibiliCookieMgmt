@@ -10,6 +10,7 @@ import textwrap
 import unittest
 from pathlib import Path
 
+import httpx
 from fastapi.testclient import TestClient
 
 
@@ -19,6 +20,7 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 from core.infrastructure.repositories.cookie_repository import CookieRepository
+from core.infrastructure.bilibili_client import BilibiliClient
 from core.services.cookie_service import CookieService
 from core.config.loader import AppConfig
 
@@ -183,6 +185,46 @@ class FakeBilibiliClient:
                 "cookie_info": build_raw(uid, prefix="refreshed")["cookie_info"],
             },
         }
+
+
+class InvalidAfterRefreshClient(FakeBilibiliClient):
+    async def refresh_cookie(self, access_key: str, refresh_token: str):
+        uid = access_key.rsplit("-", 1)[-1]
+        return {
+            "code": 0,
+            "ts": 1700000000,
+            "data": {
+                "token_info": {
+                    "access_token": f"invalid-access-{uid}",
+                    "refresh_token": f"invalid-refresh-{uid}",
+                    "expires_in": 3600,
+                },
+                "cookie_info": build_raw(uid, prefix="invalid")["cookie_info"],
+            },
+        }
+
+
+class RaisingRiskClient(FakeBilibiliClient):
+    async def check_risk_control(self, header_string: str, room_id: int = 5440):
+        raise RuntimeError("risk boom")
+
+
+class FakeHttpClient:
+    def __init__(self, response: httpx.Response):
+        self.response = response
+
+    async def get(self, *args, **kwargs):
+        return self.response
+
+    async def post(self, *args, **kwargs):
+        return self.response
+
+    async def aclose(self) -> None:
+        return None
+
+
+async def fake_wbi_keys(_cookie: str = ""):
+    return "a" * 32, "b" * 32
 
 
 class RepositoryTagTests(unittest.IsolatedAsyncioTestCase):
@@ -587,6 +629,28 @@ class TicketAndRiskServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("b_nut=", result["header_string"])
         self.assertNotIn("bili_ticket=", result["header_string"])
 
+    async def test_api_sanitizer_strips_legacy_managed_header_only_secrets(self) -> None:
+        doc = await self.repo.get("9001")
+        doc["managed"]["header_string"] = (
+            f"{doc['managed']['header_string']}; b_nut=legacy-nut; bili_ticket=legacy-ticket"
+        )
+        (self.cookie_dir / "9001.json").write_text(json.dumps(doc, ensure_ascii=False), encoding="utf-8")
+
+        random_simple = await self.service.get_random_cookie(fmt="simple")
+        self.assertIsNotNone(random_simple)
+        self.assertNotIn("b_nut=", random_simple["header_string"])
+        self.assertNotIn("bili_ticket=", random_simple["header_string"])
+
+        got = await self.service.get_cookie("9001")
+        self.assertIsNotNone(got)
+        self.assertNotIn("b_nut=", got["managed"]["header_string"])
+        self.assertNotIn("bili_ticket=", got["managed"]["header_string"])
+
+        listed = await self.service.list_cookies()
+        self.assertEqual(len(listed), 1)
+        self.assertNotIn("b_nut=", listed[0]["managed"]["header_string"])
+        self.assertNotIn("bili_ticket=", listed[0]["managed"]["header_string"])
+
     async def test_check_cookies_counts_invalid_as_failed(self) -> None:
         async def fake_invalid(_hs: str) -> bool:
             return False
@@ -602,6 +666,43 @@ class TicketAndRiskServiceTests(unittest.IsolatedAsyncioTestCase):
         summary = await self.service.refresh_cookies(ids=["9001"])
         self.assertEqual(summary["succeeded"], 0)
         self.assertEqual(summary["failed"], 1)
+
+    async def test_refresh_cookie_returns_final_checked_document(self) -> None:
+        self.service.client = InvalidAfterRefreshClient()
+
+        result = await self.service.refresh_cookie("9001")
+        stored = await self.repo.get("9001")
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result["managed"]["status"], "invalid")
+        self.assertEqual(stored["managed"]["status"], "invalid")
+        self.assertEqual(result["managed"]["last_check_time"], stored["managed"]["last_check_time"])
+
+    async def test_check_cookie_rebuilds_legacy_bnut_header_when_disabled(self) -> None:
+        doc = await self.repo.get("9001")
+        doc["managed"]["header_string"] = f"{doc['managed']['header_string']}; b_nut=legacy-nut"
+        (self.cookie_dir / "9001.json").write_text(json.dumps(doc, ensure_ascii=False), encoding="utf-8")
+
+        checked = await self.service.check_cookie("9001")
+        stored = await self.repo.get("9001")
+
+        self.assertIsNotNone(checked)
+        self.assertNotIn("b_nut=", checked["managed"]["header_string"])
+        self.assertNotIn("b_nut=", stored["managed"]["header_string"])
+
+    async def test_risk_control_exception_records_error_and_preserves_state(self) -> None:
+        await self.repo.update_risk_control("9001", checked_ok=True, risk_controlled=True, voucher="old-voucher")
+        self.service.config.bili.risk_control_enabled = True
+        self.service.client = RaisingRiskClient()
+
+        summary = await self.service.check_risk_control_for_all()
+        stored = await self.repo.get("9001")
+
+        self.assertEqual(summary["checked"], 0)
+        self.assertEqual(summary["failed"], 1)
+        self.assertTrue(stored["managed"]["risk_controlled"])
+        self.assertEqual(stored["managed"]["risk_control_voucher"], "old-voucher")
+        self.assertEqual(stored["managed"]["risk_control_error_message"], "risk boom")
 
     async def test_ticket_refresh_continues_when_b_nut_is_none(self) -> None:
         """fetch_b_nut 返回 None 时仍继续获取 ticket。"""
@@ -620,6 +721,65 @@ class TicketAndRiskServiceTests(unittest.IsolatedAsyncioTestCase):
         raw = doc.get("raw", {})
         cookie_map = self.repo._extract_cookie_map(raw)
         self.assertEqual(cookie_map.get("bili_ticket"), "got-it")
+
+
+class BilibiliClientContractTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self) -> None:
+        self.client = BilibiliClient()
+
+    async def asyncTearDown(self) -> None:
+        await self.client.aclose()
+
+    async def test_risk_control_non_2xx_is_failure(self) -> None:
+        self.client._get_wbi_keys = fake_wbi_keys
+        self.client._client = FakeHttpClient(httpx.Response(
+            500,
+            headers={},
+            request=httpx.Request("GET", "https://example.test"),
+        ))
+
+        result = await self.client.check_risk_control("SESSDATA=test")
+        self.assertFalse(result["ok"])
+        self.assertFalse(result["risk_controlled"])
+        self.assertEqual(result["status"], 500)
+        self.assertIn("HTTP 500", result["error_message"])
+
+    async def test_risk_control_minus_352_without_voucher_is_controlled(self) -> None:
+        self.client._get_wbi_keys = fake_wbi_keys
+        self.client._client = FakeHttpClient(httpx.Response(
+            200,
+            headers={"bili-status-code": "-352"},
+            request=httpx.Request("GET", "https://example.test"),
+        ))
+
+        result = await self.client.check_risk_control("SESSDATA=test")
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["risk_controlled"])
+        self.assertIsNone(result["voucher"])
+
+    async def test_get_bili_ticket_requires_positive_ttl(self) -> None:
+        self.client._client = FakeHttpClient(httpx.Response(
+            200,
+            json={"code": 0, "data": {"ticket": "ticket", "created_at": 1700000000, "ttl": 0}},
+            request=httpx.Request("POST", "https://example.test"),
+        ))
+
+        self.assertIsNone(await self.client.get_bili_ticket())
+
+    async def test_get_bili_ticket_returns_real_expires(self) -> None:
+        self.client._client = FakeHttpClient(httpx.Response(
+            200,
+            json={"code": 0, "data": {"ticket": "ticket", "created_at": 1700000000, "ttl": 86400}},
+            request=httpx.Request("POST", "https://example.test"),
+        ))
+
+        result = await self.client.get_bili_ticket()
+        self.assertEqual(result, {
+            "ticket": "ticket",
+            "created_at": 1700000000,
+            "ttl": 86400,
+            "expires": 1700086400,
+        })
 
 
 class ConfigSchedulerTests(unittest.TestCase):
