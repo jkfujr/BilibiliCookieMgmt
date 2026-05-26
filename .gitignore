@@ -12,3 +12,5 @@ __pycache__
 1.md
 BilibiliCookieMgmt/static/
 .docs/
+.venv/
+static/

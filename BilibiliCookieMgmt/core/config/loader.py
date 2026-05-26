@@ -31,13 +31,21 @@ class GotifyConfig:
 @dataclass
 class SchedulerItemConfig:
     enable: bool = False
-    interval_seconds: int = 600
+    interval_seconds: int = 43200
 
 
 @dataclass
 class SchedulerConfig:
     cookie_check: SchedulerItemConfig = field(default_factory=SchedulerItemConfig)
     cookie_refresh: SchedulerItemConfig = field(default_factory=lambda: SchedulerItemConfig(enable=False, interval_seconds=86400))
+    bili_ticket_refresh: SchedulerItemConfig = field(default_factory=lambda: SchedulerItemConfig(enable=False, interval_seconds=1800))
+    risk_control_check: SchedulerItemConfig = field(default_factory=lambda: SchedulerItemConfig(enable=False, interval_seconds=3600))
+
+
+@dataclass
+class BiliConfig:
+    bili_ticket_enabled: bool = False
+    risk_control_enabled: bool = False
 
 
 @dataclass
@@ -48,6 +56,7 @@ class AppConfig:
     storage: StorageConfig = field(default_factory=StorageConfig)
     gotify: GotifyConfig = field(default_factory=GotifyConfig)
     scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
+    bili: BiliConfig = field(default_factory=BiliConfig)
 
 
 def _ensure_dirs(cfg: AppConfig) -> None:
@@ -84,6 +93,9 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
     scheduler_cfg = data.get("SCHEDULER", {})
     check_cfg_src = scheduler_cfg.get("COOKIE_CHECK", {}) if scheduler_cfg else {}
     refresh_cfg_src = scheduler_cfg.get("COOKIE_REFRESH", {}) if scheduler_cfg else {}
+    ticket_refresh_cfg_src = scheduler_cfg.get("BILI_TICKET_REFRESH", {}) if scheduler_cfg else {}
+    risk_check_cfg_src = scheduler_cfg.get("RISK_CONTROL_CHECK", {}) if scheduler_cfg else {}
+    bili_cfg = data.get("BILI", {})
 
     cfg = AppConfig(
         host=str(data.get("HOST", "0.0.0.0")),
@@ -111,6 +123,18 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
                 enable=bool(refresh_cfg_src.get("enable", False)),
                 interval_seconds=int(refresh_cfg_src.get("interval_seconds", 86400)),
             ),
+            bili_ticket_refresh=SchedulerItemConfig(
+                enable=True,
+                interval_seconds=int(ticket_refresh_cfg_src.get("interval_seconds", 43200)),
+            ),
+            risk_control_check=SchedulerItemConfig(
+                enable=True,
+                interval_seconds=int(risk_check_cfg_src.get("interval_seconds", 3600)),
+            ),
+        ),
+        bili=BiliConfig(
+            bili_ticket_enabled=bool(bili_cfg.get("bili_ticket_enabled", False)),
+            risk_control_enabled=bool(bili_cfg.get("risk_control_enabled", False)),
         ),
     )
 

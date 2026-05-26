@@ -37,7 +37,10 @@ def create_app() -> FastAPI:
     config = load_config()
     logger.info(f"配置加载完成, 端口: {config.port}")
 
-    repository = CookieRepository(base_dir=config.storage.cookie_dir)
+    repository = CookieRepository(
+        base_dir=config.storage.cookie_dir,
+        bili_ticket_enabled=config.bili.bili_ticket_enabled
+    )
     # 通知服务
     if config.gotify.enable and config.gotify.url and config.gotify.token:
         notification = GotifyNotificationService(
@@ -50,7 +53,7 @@ def create_app() -> FastAPI:
         notification = NoopNotificationService()
 
     bilibili_client = BilibiliClient()
-    service = CookieService(repository=repository, notification=notification, bilibili_client=bilibili_client)
+    service = CookieService(repository=repository, config=config, notification=notification, bilibili_client=bilibili_client)
 
     # 路由
     scheduler = AppScheduler(service=service, config=config)
