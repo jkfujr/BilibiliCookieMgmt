@@ -38,11 +38,11 @@ class AppScheduler:
             logger.info("启动 Cookie 刷新任务")
             t = asyncio.create_task(self._loop_cookie_refresh())
             self._tasks.append(t)
-        if self.config.bili.bili_ticket_enabled:
+        if self.config.bili.bili_ticket_enabled and self.config.scheduler.bili_ticket_refresh.enable:
             logger.info("启动 bili_ticket 刷新任务")
             t = asyncio.create_task(self._loop_bili_ticket_refresh())
             self._tasks.append(t)
-        if self.config.bili.risk_control_enabled:
+        if self.config.bili.risk_control_enabled and self.config.scheduler.risk_control_check.enable:
             logger.info("启动风控检测任务")
             t = asyncio.create_task(self._loop_risk_control_check())
             self._tasks.append(t)

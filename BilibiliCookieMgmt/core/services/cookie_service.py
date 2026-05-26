@@ -53,14 +53,17 @@ class CookieService:
             )
         except Exception as e:
             logger.error(f"Cookie 创建后通知发送失败: {e}", exc_info=True)
-        return self._clean_api_doc(doc)
+        result = self._prepare_api_doc(doc)
+        assert result is not None, "save_from_raw 返回的文档经净化后不应为 None"
+        return result
 
     async def enrich_after_create(self, dede_user_id: str) -> Optional[Dict[str, Any]]:
         """
-        扫码创建后置处理: 
+        扫码创建后置处理:
         - 获取并更新 buvid3/4/b_nut(如可能)
+        - 获取 bili_ticket(如启用)
         - 执行首轮有效性检查与用户名写入
-        返回更新后的文档。
+        返回净化后的最新文档。
         """
         doc = await self.repo.get(dede_user_id)
         if not doc:
@@ -68,44 +71,36 @@ class CookieService:
         info = doc.get(MANAGED_KEY, {}) if isinstance(doc.get(MANAGED_KEY), dict) else {}
         header_string = info.get("header_string", "")
 
-        # 获取 buvid3/4、b_nut、bili_ticket
-        if self.client and header_string:
-            try:
-                b_nut_data = await self.client.fetch_b_nut(header_string)
-                buvid_data = await self.client.fetch_buvid(header_string)
-                b3 = (buvid_data or {}).get("b_3")
-                b4 = (buvid_data or {}).get("b_4")
-                b_nut = (b_nut_data or {}).get("b_nut")
-                if b3 or b4 or b_nut:
-                    doc = await self.repo.update_buvid_bnut(dede_user_id, b3, b4, b_nut) or doc
-
-                # 获取 bili_ticket (如果启用)
-                if self.config.bili.bili_ticket_enabled:
-                    raw = doc.get(RAW_KEY, {}) if isinstance(doc.get(RAW_KEY), dict) else {}
-                    cookie_map = CookieRepository._extract_cookie_map(raw)
-                    csrf = cookie_map.get("bili_jct", "")
-                    ticket = await self.client.get_bili_ticket(csrf)
-                    if ticket:
-                        doc = await self.repo.update_bili_ticket(dede_user_id, ticket) or doc
-
-            except Exception as e:
-                logger.error(f"Cookie 创建后置处理-获取 buvid/b_nut/ticket 失败: {e}", exc_info=True)
-                pass
+        # 刷新 buvid/b_nut 和 bili_ticket — 互不阻断
+        if header_string:
+            updated = await self._refresh_buvid_bnut(dede_user_id, header_string)
+            if updated:
+                doc = updated
+            updated = await self._refresh_bili_ticket(dede_user_id)
+            if updated:
+                doc = updated
 
         # 首轮检查
         try:
-            doc = await self.check_cookie(dede_user_id) or doc
+            checked = await self.check_cookie(dede_user_id)
+            if checked:
+                doc = checked
         except Exception as e:
             logger.warning(f"扫码后置处理-首轮检查异常: {e}")
 
-        return doc
+        return self._prepare_api_doc(doc)
 
     async def get_cookie(self, dede_user_id: str) -> Optional[Dict[str, Any]]:
-        return self._clean_api_doc(await self.repo.get(dede_user_id))
+        return self._prepare_api_doc(await self.repo.get(dede_user_id))
 
     async def list_cookies(self) -> List[Dict[str, Any]]:
         docs = await self.repo.list()
-        return [self._clean_api_doc(d) for d in docs]
+        result: List[Dict[str, Any]] = []
+        for d in docs:
+            clean = self._prepare_api_doc(d)
+            assert clean is not None
+            result.append(clean)
+        return result
 
     async def delete_cookie(self, dede_user_id: str) -> bool:
         return await self.repo.delete(dede_user_id)
@@ -136,7 +131,7 @@ class CookieService:
         if not header_string or should_rebuild:
             raw = doc.get(RAW_KEY, {}) if isinstance(doc.get(RAW_KEY), dict) else {}
             cookie_map = CookieRepository._extract_cookie_map(raw)
-            header_string = CookieRepository._build_header_string(cookie_map, self.config.bili.bili_ticket_enabled)
+            header_string = self.repo._build_managed_header_string(cookie_map)
 
         is_valid = True
         error_message: str | None = None
@@ -185,10 +180,10 @@ class CookieService:
 
     async def refresh_cookie(self, dede_user_id: str) -> Optional[Dict[str, Any]]:
         """
-        Cookie 刷新(接入 BilibiliClient): 
+        Cookie 刷新(接入 BilibiliClient):
         - 使用存储中的 token_info 调用刷新接口
         - 刷新成功后更新 token_info/cookie_info、header_string 与管理字段
-        - 获取并更新 buvid3/4(如可能)
+        - 获取并更新 buvid3/4/b_nut/bili_ticket(互不阻断)
         - 触发健康检查并发送通知
         """
         doc = await self.repo.get(dede_user_id)
@@ -228,7 +223,6 @@ class CookieService:
         new_cookie_info = data.get("cookie_info", {})
         ts = resp.get("ts")
 
-        # 更新文件
         result = await self.repo.update_on_refresh(dede_user_id, new_token_info, new_cookie_info, ts)
         logger.info(f"Cookie 刷新成功: {dede_user_id}")
 
@@ -241,32 +235,16 @@ class CookieService:
         except Exception:
             expire_time_str = "未知"
 
-        # 获取 buvid/ticket 并更新
-        try:
-            info = (result or {}).get(MANAGED_KEY, {}) if isinstance((result or {}).get(MANAGED_KEY), dict) else {}
-            header_string = info.get("header_string", "")
-
-            # buvid/b_nut
-            buvid_data = await self.client.fetch_buvid(header_string)
-            b_nut_data = await self.client.fetch_b_nut(header_string)
-            if (buvid_data and buvid_data.get("b_3") and buvid_data.get("b_4")) or (b_nut_data and b_nut_data.get("b_nut")):
-                updated = await self.repo.update_buvid_bnut(dede_user_id, buvid_data.get("b_3"), buvid_data.get("b_4"), b_nut_data.get("b_nut") or None)
-                if updated:
-                    result = updated
-
-            # bili_ticket (如果启用)
-            if self.config.bili.bili_ticket_enabled:
-                raw = (result or {}).get(RAW_KEY, {}) if isinstance((result or {}).get(RAW_KEY), dict) else {}
-                cookie_map = CookieRepository._extract_cookie_map(raw)
-                csrf = cookie_map.get("bili_jct", "")
-                ticket = await self.client.get_bili_ticket(csrf)
-                if ticket:
-                    updated = await self.repo.update_bili_ticket(dede_user_id, ticket)
-                    if updated:
-                        result = updated
-
-        except Exception:
-            pass
+        # 获取 buvid/b_nut 和 bili_ticket — 互不阻断
+        info = (result or {}).get(MANAGED_KEY, {}) if isinstance((result or {}).get(MANAGED_KEY), dict) else {}
+        header_string = info.get("header_string", "")
+        if header_string:
+            updated = await self._refresh_buvid_bnut(dede_user_id, header_string)
+            if updated:
+                result = updated
+        updated = await self._refresh_bili_ticket(dede_user_id)
+        if updated:
+            result = updated
 
         # 刷新后健康检查
         try:
@@ -290,14 +268,16 @@ class CookieService:
         """
         批量检查 Cookie 有效性。
         - ids 提供时, 仅检查这些用户。
-        - all=True 时, 检查所有“启用”的 Cookie(is_enabled 为 True)。
-        返回执行摘要与明细。
+        - all=True 时, 检查所有启用的 Cookie(is_enabled 为 True)。
+        返回执行摘要与明细。status 为 valid 计成功, 其余计失败。
         """
         target_ids: List[str] = []
         if all:
             items = await self.repo.list()
             for doc in items:
                 info = doc.get(MANAGED_KEY, {}) if isinstance(doc.get(MANAGED_KEY), dict) else {}
+                if not info.get("is_enabled", True):
+                    continue
                 uid = info.get("DedeUserID")
                 if uid:
                     target_ids.append(str(uid))
@@ -313,11 +293,16 @@ class CookieService:
         for uid in target_ids:
             try:
                 res = await self.check_cookie(uid)
-                if res:
+                if not res:
+                    details.append({"DedeUserID": uid, "ok": False, "message": "未找到"})
+                    failed += 1
+                    continue
+                info = res.get(MANAGED_KEY, {}) if isinstance(res.get(MANAGED_KEY), dict) else {}
+                if info.get("status") == "valid":
                     details.append({"DedeUserID": uid, "ok": True})
                     succeeded += 1
                 else:
-                    details.append({"DedeUserID": uid, "ok": False, "message": "未找到或检查失败"})
+                    details.append({"DedeUserID": uid, "ok": False, "message": f"状态: {info.get('status')}"})
                     failed += 1
             except Exception as e:
                 details.append({"DedeUserID": uid, "ok": False, "message": f"异常: {e}"})
@@ -329,14 +314,16 @@ class CookieService:
         """
         批量刷新 Cookie。
         - ids 提供时, 仅刷新这些用户。
-        - all=True 时, 刷新所有“启用”的 Cookie(is_enabled 为 True)。
-        返回执行摘要与明细。
+        - all=True 时, 刷新所有启用的 Cookie(is_enabled 为 True)。
+        返回执行摘要与明细。refresh_status 为 success 计成功, 其余计失败。
         """
         target_ids: List[str] = []
         if all:
             items = await self.repo.list()
             for doc in items:
                 info = doc.get(MANAGED_KEY, {}) if isinstance(doc.get(MANAGED_KEY), dict) else {}
+                if not info.get("is_enabled", True):
+                    continue
                 uid = info.get("DedeUserID")
                 if uid:
                     target_ids.append(str(uid))
@@ -352,11 +339,16 @@ class CookieService:
         for uid in target_ids:
             try:
                 res = await self.refresh_cookie(uid)
-                if res:
+                if not res:
+                    details.append({"DedeUserID": uid, "ok": False, "message": "未找到"})
+                    failed += 1
+                    continue
+                info = res.get(MANAGED_KEY, {}) if isinstance(res.get(MANAGED_KEY), dict) else {}
+                if info.get("refresh_status") == "success":
                     details.append({"DedeUserID": uid, "ok": True})
                     succeeded += 1
                 else:
-                    details.append({"DedeUserID": uid, "ok": False, "message": "未找到或刷新失败"})
+                    details.append({"DedeUserID": uid, "ok": False, "message": f"刷新状态: {info.get('refresh_status')}"})
                     failed += 1
             except Exception as e:
                 details.append({"DedeUserID": uid, "ok": False, "message": f"异常: {e}"})
@@ -385,13 +377,57 @@ class CookieService:
 
     async def set_enabled(self, dede_user_id: str, is_enabled: bool) -> Optional[Dict[str, Any]]:
         """设置启用/禁用状态(仅影响随机 Cookie 选择)。"""
-        return self._clean_api_doc(await self.repo.update_enabled(dede_user_id, is_enabled))
+        return self._prepare_api_doc(await self.repo.update_enabled(dede_user_id, is_enabled))
 
     async def set_tags(self, dede_user_id: str, tags: List[str]) -> Optional[Dict[str, Any]]:
         """设置账号标签。"""
-        return self._clean_api_doc(await self.repo.update_tags(dede_user_id, _normalize_tags(tags)))
+        return self._prepare_api_doc(await self.repo.update_tags(dede_user_id, _normalize_tags(tags)))
 
-    def _clean_api_doc(self, doc: Dict[str, Any]) -> Dict[str, Any]:
+    async def _refresh_buvid_bnut(self, dede_user_id: str, header_string: str) -> Optional[Dict[str, Any]]:
+        """获取并更新 buvid3/buvid4/b_nut。任一失败不影响其他字段。返回最新仓储文档或 None。"""
+        if not self.client or not header_string:
+            return None
+        try:
+            buvid_data = await self.client.fetch_buvid(header_string)
+        except Exception:
+            logger.warning(f"fetch_buvid 异常: {dede_user_id}", exc_info=True)
+            buvid_data = None
+        try:
+            b_nut_data = await self.client.fetch_b_nut(header_string)
+        except Exception:
+            logger.warning(f"fetch_b_nut 异常: {dede_user_id}", exc_info=True)
+            b_nut_data = None
+
+        b3 = (buvid_data or {}).get("b_3")
+        b4 = (buvid_data or {}).get("b_4")
+        b_nut = (b_nut_data or {}).get("b_nut")
+
+        if b3 or b4 or b_nut:
+            try:
+                return await self.repo.update_buvid_bnut(dede_user_id, b3, b4, b_nut)
+            except Exception as e:
+                logger.warning(f"更新 buvid/b_nut 失败: {dede_user_id}, 错误: {e}")
+        return None
+
+    async def _refresh_bili_ticket(self, dede_user_id: str) -> Optional[Dict[str, Any]]:
+        """获取并更新 bili_ticket。仅在功能启用且有 client 时执行。返回最新仓储文档或 None。"""
+        if not self.config.bili.bili_ticket_enabled or not self.client:
+            return None
+        try:
+            doc = await self.repo.get(dede_user_id)
+            if not doc:
+                return None
+            raw = doc.get(RAW_KEY, {}) if isinstance(doc.get(RAW_KEY), dict) else {}
+            cookie_map = CookieRepository._extract_cookie_map(raw)
+            csrf = cookie_map.get("bili_jct", "")
+            ticket = await self.client.get_bili_ticket(csrf)
+            if ticket:
+                return await self.repo.update_bili_ticket(dede_user_id, ticket)
+        except Exception as e:
+            logger.warning(f"刷新 bili_ticket 异常: {dede_user_id}, 错误: {e}")
+        return None
+
+    def _prepare_api_doc(self, doc: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         """当 bili_ticket_enabled 为 False 时，裁剪 API 输出中的 bili_ticket/b_nut。"""
         if not doc or self.config.bili.bili_ticket_enabled:
             return doc
@@ -413,6 +449,26 @@ class CookieService:
             parts = [p for p in header.split("; ") if not p.startswith("bili_ticket=") and not p.startswith("b_nut=")]
             result[MANAGED_KEY]["header_string"] = "; ".join(parts)
         return result
+
+    @staticmethod
+    def _ticket_needs_refresh(raw: Dict[str, Any]) -> bool:
+        """判断 bili_ticket 是否缺失或将在 12 小时内过期。"""
+        cookies = raw.get("cookie_info", {}).get("cookies", [])
+        ticket_value = None
+        expires_ts = None
+        for c in cookies:
+            if isinstance(c, dict) and c.get("name") == "bili_ticket":
+                ticket_value = c.get("value")
+                expires_ts = c.get("expires")
+                break
+        if not ticket_value:
+            return True
+        if not expires_ts:
+            return True
+        try:
+            return int(expires_ts) - datetime.now().timestamp() < 43200
+        except (TypeError, ValueError):
+            return True
 
     async def refresh_expiring_tickets(self) -> Dict[str, Any]:
         """
@@ -438,31 +494,13 @@ class CookieService:
 
             total += 1
             raw = doc.get(RAW_KEY, {}) if isinstance(doc.get(RAW_KEY), dict) else {}
-            cookie_map = CookieRepository._extract_cookie_map(raw)
-            needs_fetch = not cookie_map.get("bili_ticket")
-
-            if not needs_fetch:
-                cookies = raw.get("cookie_info", {}).get("cookies", [])
-                expires_ts = None
-                for c in cookies:
-                    if isinstance(c, dict) and c.get("name") == "bili_ticket":
-                        expires_ts = c.get("expires")
-                        break
-                if expires_ts:
-                    if int(expires_ts) - datetime.now().timestamp() < 43200:
-                        needs_fetch = True
-                else:
-                    needs_fetch = True
-
-            if not needs_fetch:
+            if not self._ticket_needs_refresh(raw):
                 skipped += 1
                 continue
 
             try:
-                csrf = cookie_map.get("bili_jct", "")
-                ticket = await self.client.get_bili_ticket(csrf)
+                ticket = await self._refresh_bili_ticket(dede_user_id)
                 if ticket:
-                    await self.repo.update_bili_ticket(dede_user_id, ticket)
                     refreshed += 1
                     details.append({"DedeUserID": dede_user_id, "ok": True})
                     logger.info(f"bili_ticket 自动刷新成功: {dede_user_id}")
@@ -484,6 +522,7 @@ class CookieService:
         遍历所有有效 Cookie 执行风控检测。
         仅当 BILI 配置中 risk_control_enabled 启用时由独立调度任务调用。
         返回执行摘要: {ok, total, checked, failed, details}
+        检测失败 (rc["ok"]=False) 不计入 checked, 也不覆盖已有风控状态。
         """
         if not self.config.bili.risk_control_enabled or not self.client:
             return {"ok": True, "total": 0, "checked": 0, "failed": 0, "details": []}
@@ -506,8 +545,20 @@ class CookieService:
             total += 1
             try:
                 rc = await self.client.check_risk_control(header_string)
+                if not rc.get("ok"):
+                    failed += 1
+                    details.append({"DedeUserID": dede_user_id, "ok": False, "message": rc.get("error_message", "检测失败")})
+                    await self.repo.update_risk_control(
+                        dede_user_id,
+                        checked_ok=False,
+                        error_message=rc.get("error_message", "检测失败"),
+                    )
+                    logger.warning(f"风控检测失败: {dede_user_id}, 错误: {rc.get('error_message')}")
+                    continue
+
                 await self.repo.update_risk_control(
                     dede_user_id,
+                    checked_ok=True,
                     risk_controlled=rc["risk_controlled"],
                     voucher=rc.get("voucher"),
                 )
@@ -543,10 +594,13 @@ class CookieService:
         if not candidates:
             return None
         chosen = random.choice(candidates)
+        # 先净化确保 header_string 符合当前 ticket 策略
+        chosen = self._prepare_api_doc(chosen)
+        assert chosen is not None
         if fmt == "simple":
             info = chosen.get(MANAGED_KEY, {}) if isinstance(chosen.get(MANAGED_KEY), dict) else {}
             return {
                 "DedeUserID": info.get("DedeUserID"),
                 "header_string": info.get("header_string"),
             }
-        return self._clean_api_doc(chosen)
+        return chosen

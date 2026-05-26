@@ -124,11 +124,11 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
                 interval_seconds=int(refresh_cfg_src.get("interval_seconds", 86400)),
             ),
             bili_ticket_refresh=SchedulerItemConfig(
-                enable=True,
+                enable=bool(ticket_refresh_cfg_src.get("enable", True)),
                 interval_seconds=int(ticket_refresh_cfg_src.get("interval_seconds", 43200)),
             ),
             risk_control_check=SchedulerItemConfig(
-                enable=True,
+                enable=bool(risk_check_cfg_src.get("enable", True)),
                 interval_seconds=int(risk_check_cfg_src.get("interval_seconds", 3600)),
             ),
         ),

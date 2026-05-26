@@ -20,6 +20,7 @@ if str(BACKEND_DIR) not in sys.path:
 
 from core.infrastructure.repositories.cookie_repository import CookieRepository
 from core.services.cookie_service import CookieService
+from core.config.loader import AppConfig
 
 
 def build_cookie(name: str, value: str) -> dict:
@@ -151,6 +152,22 @@ class FakeBilibiliClient:
 
     async def fetch_buvid(self, header_string: str):
         return {"b_3": "fake-buvid3", "b_4": "fake-buvid4"}
+
+    async def fetch_b_nut(self, header_string: str):
+        return {"b_nut": "fake-bnut-value"}
+
+    async def get_bili_ticket(self, csrf: str = ""):
+        return {"ticket": "fake-ticket-value", "created_at": 1700000000, "ttl": 86400, "expires": 1700086400}
+
+    async def check_risk_control(self, header_string: str, room_id: int = 5440):
+        return {
+            "ok": True,
+            "risk_controlled": False,
+            "voucher": None,
+            "bili_status_code": "0",
+            "status": 200,
+            "error_message": None,
+        }
 
     async def refresh_cookie(self, access_key: str, refresh_token: str):
         uid = access_key.rsplit("-", 1)[-1]
@@ -298,13 +315,103 @@ class RepositoryTagTests(unittest.IsolatedAsyncioTestCase):
         tagged = await self.repo.update_tags("1004", ["备用"])
         self.assertEqual(tagged["managed"]["join_time"], join_time)
 
+    async def test_header_includes_ticket_when_enabled_and_present(self) -> None:
+        repo = CookieRepository(str(self.cookie_dir), bili_ticket_enabled=True)
+        raw = build_raw("8001")
+        raw["cookie_info"]["cookies"].extend([
+            build_cookie("b_nut", "nut-value"),
+            build_cookie("bili_ticket", "ticket-value"),
+        ])
+        saved = await repo.save_from_raw(raw)
+        self.assertIn("b_nut=nut-value", saved["managed"]["header_string"])
+        self.assertIn("bili_ticket=ticket-value", saved["managed"]["header_string"])
+
+    async def test_header_excludes_ticket_when_disabled(self) -> None:
+        repo = CookieRepository(str(self.cookie_dir), bili_ticket_enabled=False)
+        raw = build_raw("8002")
+        raw["cookie_info"]["cookies"].extend([
+            build_cookie("b_nut", "nut-value"),
+            build_cookie("bili_ticket", "ticket-value"),
+        ])
+        saved = await repo.save_from_raw(raw)
+        self.assertNotIn("b_nut=", saved["managed"]["header_string"])
+        self.assertNotIn("bili_ticket=", saved["managed"]["header_string"])
+
+    async def test_header_no_ticket_placeholder_when_missing(self) -> None:
+        repo = CookieRepository(str(self.cookie_dir), bili_ticket_enabled=True)
+        raw = build_raw("8003")
+        # 不添加 b_nut 和 bili_ticket
+        saved = await repo.save_from_raw(raw)
+        self.assertNotIn("b_nut=", saved["managed"]["header_string"])
+        self.assertNotIn("bili_ticket=", saved["managed"]["header_string"])
+
+    async def test_upsert_cookie_preserves_existing_expires(self) -> None:
+        cookies = [{"name": "test", "value": "old", "expires": 99999}]
+        CookieRepository._upsert_cookie(cookies, "test", "new")
+        self.assertEqual(cookies[0]["value"], "new")
+        self.assertEqual(cookies[0]["expires"], 99999)
+
+    async def test_upsert_cookie_overwrites_expires_when_provided(self) -> None:
+        cookies = [{"name": "test", "value": "old", "expires": 99999}]
+        CookieRepository._upsert_cookie(cookies, "test", "new", expires=12345)
+        self.assertEqual(cookies[0]["expires"], 12345)
+
+    async def test_update_on_refresh_replaces_cookie_info_correctly(self) -> None:
+        repo = CookieRepository(str(self.cookie_dir), bili_ticket_enabled=True)
+        raw = build_raw("8004")
+        raw["cookie_info"]["cookies"].extend([
+            build_cookie("bili_ticket", "existing-ticket"),
+        ])
+        saved = await repo.save_from_raw(raw)
+        self.assertIn("bili_ticket=existing-ticket", saved["managed"]["header_string"])
+
+        new_cookie_info = build_raw("8004", prefix="refreshed")["cookie_info"]
+        # update_on_refresh 会整体替换 cookie_info — ticket 由服务层事后补刷
+        refreshed = await repo.update_on_refresh(
+            "8004",
+            {"access_token": "at", "refresh_token": "rt", "expires_in": 3600},
+            new_cookie_info,
+            ts=1700000000,
+        )
+        self.assertEqual(refreshed["managed"]["refresh_status"], "success")
+        self.assertEqual(refreshed["raw"]["cookie_info"], new_cookie_info)
+
+    async def test_update_bili_ticket_uses_dict_expires(self) -> None:
+        repo = CookieRepository(str(self.cookie_dir), bili_ticket_enabled=True)
+        await repo.save_from_raw(build_raw("8005"))
+        updated = await repo.update_bili_ticket("8005", {
+            "ticket": "new-ticket", "created_at": 1700000000, "ttl": 86400, "expires": 1700086400,
+        })
+        self.assertIsNotNone(updated)
+        cookies = updated["raw"]["cookie_info"]["cookies"]
+        ticket_cookie = next(c for c in cookies if c["name"] == "bili_ticket")
+        self.assertEqual(ticket_cookie["value"], "new-ticket")
+        self.assertEqual(ticket_cookie["expires"], 1700086400)
+
+    async def test_update_risk_control_failure_preserves_old_state(self) -> None:
+        repo = CookieRepository(str(self.cookie_dir))
+        await repo.save_from_raw(build_raw("8006"))
+        # 先写入一个风控状态
+        await repo.update_risk_control("8006", checked_ok=True, risk_controlled=True, voucher="old-voucher")
+        doc = await repo.get("8006")
+        self.assertTrue(doc["managed"]["risk_controlled"])
+        self.assertEqual(doc["managed"]["risk_control_voucher"], "old-voucher")
+
+        # 检测失败不覆盖
+        await repo.update_risk_control("8006", checked_ok=False, error_message="网络错误")
+        doc = await repo.get("8006")
+        self.assertTrue(doc["managed"]["risk_controlled"])  # 保持原值
+        self.assertEqual(doc["managed"]["risk_control_voucher"], "old-voucher")  # 保持原值
+        self.assertEqual(doc["managed"]["risk_control_error_message"], "网络错误")
+        self.assertIsNotNone(doc["managed"]["risk_control_checked_at"])
+
 
 class ServiceTagTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
         self.cookie_dir = Path(self.temp_dir.name) / "cookies"
         self.repo = CookieRepository(str(self.cookie_dir))
-        self.service = CookieService(self.repo)
+        self.service = CookieService(self.repo, AppConfig())
         await self.repo.save_from_raw(build_raw("2001"))
 
     async def asyncTearDown(self) -> None:
@@ -445,6 +552,105 @@ class ApiTagTests(unittest.TestCase):
         stored_doc = json.loads((self.cookie_dir / "3999.json").read_text(encoding="utf-8"))
         self.assertEqual(stored_doc["managed"]["tags"], [])
         self.assertEqual(stored_doc["managed"]["join_time"], response.json()["managed"]["join_time"])
+
+
+class TicketAndRiskServiceTests(unittest.IsolatedAsyncioTestCase):
+    """bili_ticket 和风控相关的服务层回归测试。"""
+
+    async def asyncSetUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.cookie_dir = Path(self.temp_dir.name) / "cookies"
+        self.repo = CookieRepository(str(self.cookie_dir))
+        config = AppConfig()
+        self.client = FakeBilibiliClient()
+        self.service = CookieService(self.repo, config, bilibili_client=self.client)
+        await self.repo.save_from_raw(build_raw("9001"))
+        await self.repo.update_check_status("9001", valid=True, username="用户9001")
+
+    async def asyncTearDown(self) -> None:
+        self.temp_dir.cleanup()
+
+    async def test_get_random_cookie_simple_strips_ticket_when_disabled(self) -> None:
+        doc = await self.repo.get("9001")
+        raw = doc["raw"]
+        raw["cookie_info"]["cookies"].extend([
+            build_cookie("b_nut", "secret-nut"),
+            build_cookie("bili_ticket", "secret-ticket"),
+        ])
+        # 直接覆写文件以注入敏感字段
+        import json, aiofiles
+        async with aiofiles.open(self.cookie_dir / "9001.json", "w", encoding="utf-8") as f:
+            await f.write(json.dumps(doc, ensure_ascii=False, indent=2))
+
+        result = await self.service.get_random_cookie(fmt="simple")
+        self.assertIsNotNone(result)
+        self.assertNotIn("b_nut=", result["header_string"])
+        self.assertNotIn("bili_ticket=", result["header_string"])
+
+    async def test_check_cookies_counts_invalid_as_failed(self) -> None:
+        async def fake_invalid(_hs: str) -> bool:
+            return False
+        self.client.check_cookie_valid = fake_invalid
+        summary = await self.service.check_cookies(ids=["9001"])
+        self.assertEqual(summary["succeeded"], 0)
+        self.assertEqual(summary["failed"], 1)
+
+    async def test_refresh_cookies_counts_failed_status(self) -> None:
+        async def fake_failed_refresh(_ak: str, _rt: str):
+            return {"code": -1, "message": "mock 刷新失败"}
+        self.client.refresh_cookie = fake_failed_refresh
+        summary = await self.service.refresh_cookies(ids=["9001"])
+        self.assertEqual(summary["succeeded"], 0)
+        self.assertEqual(summary["failed"], 1)
+
+    async def test_ticket_refresh_continues_when_b_nut_is_none(self) -> None:
+        """fetch_b_nut 返回 None 时仍继续获取 ticket。"""
+        async def fake_none_bnut(_hs: str):
+            return None
+        async def fake_ticket(_csrf: str = ""):
+            return {"ticket": "got-it", "created_at": 1, "ttl": 1, "expires": 2}
+        self.client.fetch_b_nut = fake_none_bnut
+        self.client.get_bili_ticket = fake_ticket
+        self.repo.bili_ticket_enabled = True
+        self.service.config.bili.bili_ticket_enabled = True
+
+        doc = await self.service.enrich_after_create("9001")
+        self.assertIsNotNone(doc)
+        # 应仍能写入 ticket
+        raw = doc.get("raw", {})
+        cookie_map = self.repo._extract_cookie_map(raw)
+        self.assertEqual(cookie_map.get("bili_ticket"), "got-it")
+
+
+class ConfigSchedulerTests(unittest.TestCase):
+    """配置与调度双开关联动测试。"""
+
+    def test_ticket_task_not_started_when_scheduler_disabled(self) -> None:
+        from core.config.loader import AppConfig, BiliConfig, SchedulerConfig, SchedulerItemConfig
+        config = AppConfig(
+            bili=BiliConfig(bili_ticket_enabled=True, risk_control_enabled=False),
+            scheduler=SchedulerConfig(
+                bili_ticket_refresh=SchedulerItemConfig(enable=False, interval_seconds=60),
+            ),
+        )
+        self.assertTrue(config.bili.bili_ticket_enabled)
+        self.assertFalse(config.scheduler.bili_ticket_refresh.enable)
+        # 双开关同时为 True 才启动
+        should_start = config.bili.bili_ticket_enabled and config.scheduler.bili_ticket_refresh.enable
+        self.assertFalse(should_start)
+
+    def test_risk_task_not_started_when_scheduler_disabled(self) -> None:
+        from core.config.loader import AppConfig, BiliConfig, SchedulerConfig, SchedulerItemConfig
+        config = AppConfig(
+            bili=BiliConfig(bili_ticket_enabled=False, risk_control_enabled=True),
+            scheduler=SchedulerConfig(
+                risk_control_check=SchedulerItemConfig(enable=False, interval_seconds=60),
+            ),
+        )
+        self.assertTrue(config.bili.risk_control_enabled)
+        self.assertFalse(config.scheduler.risk_control_check.enable)
+        should_start = config.bili.risk_control_enabled and config.scheduler.risk_control_check.enable
+        self.assertFalse(should_start)
 
 
 class MigrationScriptTests(unittest.TestCase):

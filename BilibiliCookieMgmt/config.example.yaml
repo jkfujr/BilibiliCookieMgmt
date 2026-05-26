@@ -3,12 +3,12 @@ PORT: 18000
 
 # API token
 API_TOKEN:
-  enable: true          # 是否启用鉴权
-  token: 1145141919810  # Bearer Token 值
+  enable: true                     # 是否启用鉴权
+  token: 1145141919810             # Bearer Token 值
 
 # 存储配置
 STORAGE:
-  cookie_dir: "./data/cookie"  # Cookie 按用户ID存储为 JSON 文件
+  cookie_dir: "./data/cookie"      # Cookie 按用户ID存储为 JSON 文件
 
 # 通知
 GOTIFY:
@@ -27,11 +27,13 @@ SCHEDULER:
     enable: true
     interval_seconds: 2592000      # 刷新间隔(s, 默认30天)
   BILI_TICKET_REFRESH:
-    interval_seconds: 43200         # ticket 扫描间隔(s, 默认12小时)
+    enable: true                   # 是否启动 ticket 后台刷新任务
+    interval_seconds: 43200        # ticket 扫描间隔(s, 默认12小时)
   RISK_CONTROL_CHECK:
-    interval_seconds: 3600           # 风控检测间隔(s, 默认1小时)
+    enable: true                   # 是否启动风控后台检测任务
+    interval_seconds: 3600         # 风控检测间隔(s, 默认1小时)
 
 # Bilibili 客户端配置
 BILI:
-  bili_ticket_enabled: false        # 是否启用 bili_ticket 获取(降低风控)
-  risk_control_enabled: false        # 是否启用风控检测
+  bili_ticket_enabled: false       # 是否启用 bili_ticket 获取(降低风控)
+  risk_control_enabled: false      # 是否启用风控检测
