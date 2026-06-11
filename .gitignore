@@ -1,6 +1,7 @@
 * copy.*
 *.ini
 config.yaml
+config.json
 logs
 data
 build

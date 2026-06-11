@@ -11,11 +11,13 @@ import QrLoginDialog from './components/dialogs/QrLoginDialog.vue'
 import TagEditorDialog from './components/dialogs/TagEditorDialog.vue'
 import TestCookieDialog from './components/dialogs/TestCookieDialog.vue'
 import AppSidebar from './components/layout/AppSidebar.vue'
+import SettingsPage from './components/settings/SettingsPage.vue'
 import { useCookieDashboard } from './composables/useCookieDashboard'
 import { useQrLogin } from './composables/useQrLogin'
 import { useSession } from './composables/useSession'
 
 const drawer = ref(true)
+const activeView = ref('dashboard')
 const snackbar = ref({
   show: false,
   text: '',
@@ -38,6 +40,7 @@ const {
   getToken,
   openLoginDialog,
   applyLoginToken,
+  setSessionToken,
   handleUnauthorized,
 } = useSession({ showMsg })
 
@@ -158,6 +161,17 @@ const updateDeleteDialog = (value) => {
   closeDeleteDialog()
 }
 
+const changeView = (view) => {
+  activeView.value = view
+}
+
+const handleSettingsSaved = ({ result, apiToken }) => {
+  if (apiToken !== null) {
+    setSessionToken(apiToken)
+  }
+  showMsg(result?.message || '设置已保存并生效', result?.restart_required ? 'warning' : 'success')
+}
+
 </script>
 
 <template>
@@ -178,7 +192,9 @@ const updateDeleteDialog = (value) => {
       :drawer="drawer"
       :has-token="hasToken"
       :screenshot-mode="screenshotMode"
+      :active-view="activeView"
       @update:drawer="drawer = $event"
+      @change-view="changeView"
       @open-login="openLoginDialog"
       @start-scan="startScan"
       @check-all="checkAllCookies"
@@ -190,41 +206,55 @@ const updateDeleteDialog = (value) => {
     <v-main class="bg-grey-lighten-4">
       <v-app-bar elevation="1">
         <v-app-bar-nav-icon @click="drawer = !drawer"></v-app-bar-nav-icon>
-        <v-app-bar-title>账号状态概览</v-app-bar-title>
+        <v-app-bar-title>{{ activeView === 'settings' ? '系统设置' : '账号状态概览' }}</v-app-bar-title>
         <v-spacer></v-spacer>
-        <v-btn icon="mdi-refresh" :loading="loading" @click="fetchAccounts"></v-btn>
+        <v-btn
+          v-if="activeView === 'dashboard'"
+          icon="mdi-refresh"
+          :loading="loading"
+          @click="fetchAccounts"
+        ></v-btn>
       </v-app-bar>
 
       <v-container fluid class="pa-6">
-        <StatsCards :stats="stats" />
+        <template v-if="activeView === 'dashboard'">
+          <StatsCards :stats="stats" />
 
-        <v-card elevation="2">
-          <div class="px-6 py-4">
-            <div class="text-h6 font-weight-bold">账号列表</div>
-          </div>
+          <v-card elevation="2">
+            <div class="px-6 py-4">
+              <div class="text-h6 font-weight-bold">账号列表</div>
+            </div>
 
-          <v-divider></v-divider>
+            <v-divider></v-divider>
 
-          <AccountTable
-            :items="filteredAccounts"
-            :loading="loading"
-            :screenshot-mode="screenshotMode"
-            :has-tag-filter="selectedTags.length > 0"
-            :selected-tags="selectedTags"
-            :available-tags="availableTags"
-            :match-mode="tagMatchMode"
-            @toggle-enabled="toggleEnabled"
-            @edit-tags="openTagDialog"
-            @view-cookie="viewCookie"
-            @check-cookie="checkCookie"
-            @refresh-cookie="refreshCookie"
-            @delete-cookie="requestDelete"
-            @clear-filter="clearTagFilter"
-            @start-scan="startScan"
-            @update:selected-tags="updateSelectedTags"
-            @update:match-mode="updateTagMatchMode"
-          />
-        </v-card>
+            <AccountTable
+              :items="filteredAccounts"
+              :loading="loading"
+              :screenshot-mode="screenshotMode"
+              :has-tag-filter="selectedTags.length > 0"
+              :selected-tags="selectedTags"
+              :available-tags="availableTags"
+              :match-mode="tagMatchMode"
+              @toggle-enabled="toggleEnabled"
+              @edit-tags="openTagDialog"
+              @view-cookie="viewCookie"
+              @check-cookie="checkCookie"
+              @refresh-cookie="refreshCookie"
+              @delete-cookie="requestDelete"
+              @clear-filter="clearTagFilter"
+              @start-scan="startScan"
+              @update:selected-tags="updateSelectedTags"
+              @update:match-mode="updateTagMatchMode"
+            />
+          </v-card>
+        </template>
+
+        <SettingsPage
+          v-else
+          :api-client="apiClient"
+          @saved="handleSettingsSaved"
+          @error="showMsg($event, 'error')"
+        />
       </v-container>
     </v-main>
 

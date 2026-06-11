@@ -4,9 +4,9 @@ import asyncio
 import importlib.util
 import json
 import logging
+import os
 import sys
 import tempfile
-import textwrap
 import time
 import unittest
 from pathlib import Path
@@ -81,30 +81,47 @@ def build_legacy_raw(uid: str) -> dict:
 
 
 def write_config(config_path: Path, cookie_dir: Path) -> None:
-    config_path.write_text(
-        textwrap.dedent(
-            f"""
-            HOST: 127.0.0.1
-            PORT: 18080
-            API_TOKEN:
-              enable: true
-              token: test-token
-            STORAGE:
-              cookie_dir: "{cookie_dir.as_posix()}"
-            GOTIFY:
-              enable: false
-            SCHEDULER:
-              COOKIE_CHECK:
-                enable: false
-                interval_seconds: 600
-              COOKIE_REFRESH:
-                enable: false
-                interval_seconds: 86400
-                scan_interval_seconds: 21600
-            """
-        ).strip(),
-        encoding="utf-8",
-    )
+    data = {
+        "HOST": "127.0.0.1",
+        "PORT": 18080,
+        "API_TOKEN": {
+            "enable": True,
+            "token": "test-token",
+        },
+        "STORAGE": {
+            "cookie_dir": cookie_dir.as_posix(),
+        },
+        "GOTIFY": {
+            "enable": False,
+            "url": "",
+            "token": "",
+            "priority": 5,
+            "title": "BilibiliCookieMgmt",
+        },
+        "SCHEDULER": {
+            "COOKIE_CHECK": {
+                "enable": False,
+                "interval_seconds": 600,
+            },
+            "COOKIE_REFRESH": {
+                "enable": False,
+                "interval_seconds": 86400,
+                "scan_interval_seconds": 21600,
+            },
+            "BILI_TICKET_REFRESH": {
+                "enable": True,
+                "interval_seconds": 43200,
+            },
+            "RISK_CONTROL_CHECK": {
+                "interval_seconds": 3600,
+            },
+        },
+        "BILI": {
+            "bili_ticket_enabled": False,
+            "risk_control_enabled": False,
+        },
+    }
+    config_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def load_test_app(config_path: Path):
@@ -480,7 +497,7 @@ class ApiTagTests(unittest.TestCase):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.root = Path(self.temp_dir.name)
         self.cookie_dir = self.root / "cookies"
-        self.config_path = self.root / "config.yaml"
+        self.config_path = self.root / "config.json"
         write_config(self.config_path, self.cookie_dir)
 
         self.app = load_test_app(self.config_path)
@@ -604,6 +621,65 @@ class ApiTagTests(unittest.TestCase):
         stored_doc = json.loads((self.cookie_dir / "3999.json").read_text(encoding="utf-8"))
         self.assertEqual(stored_doc["managed"]["tags"], [])
         self.assertEqual(stored_doc["managed"]["join_time"], response.json()["managed"]["join_time"])
+
+    def test_get_settings_masks_sensitive_values(self) -> None:
+        response = self.client.get("/api/v1/settings/", headers=self.auth_headers)
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["API_TOKEN"]["token"], {"configured": True, "masked": "****"})
+        self.assertEqual(body["GOTIFY"]["token"], {"configured": False, "masked": ""})
+        self.assertEqual(body["SCHEDULER"]["COOKIE_REFRESH"]["scan_interval_seconds"], 21600)
+
+    def test_update_settings_preserves_overwrites_and_clears_tokens(self) -> None:
+        settings = self.client.get("/api/v1/settings/", headers=self.auth_headers).json()
+
+        settings["API_TOKEN"]["token"] = {}
+        settings["GOTIFY"]["token"] = {"value": "gotify-token"}
+        response = self.client.put("/api/v1/settings/", headers=self.auth_headers, json=settings)
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.json()["restart_required"])
+        self.assertEqual(self.app.state.config.api_token.token, "test-token")
+        self.assertEqual(self.app.state.config.gotify.token, "gotify-token")
+
+        settings = response.json()["settings"]
+        settings["API_TOKEN"]["token"] = {"value": "new-token"}
+        settings["GOTIFY"]["token"] = {"value": ""}
+        response = self.client.put("/api/v1/settings/", headers=self.auth_headers, json=settings)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.app.state.config.api_token.token, "new-token")
+        self.assertEqual(self.app.state.config.gotify.token, "")
+
+        saved = json.loads(self.config_path.read_text(encoding="utf-8"))
+        self.assertEqual(saved["API_TOKEN"]["token"], "new-token")
+        self.assertEqual(saved["GOTIFY"]["token"], "")
+
+    def test_update_settings_reports_restart_required_for_base_config(self) -> None:
+        settings = self.client.get("/api/v1/settings/", headers=self.auth_headers).json()
+        settings["API_TOKEN"]["token"] = {}
+        settings["GOTIFY"]["token"] = {}
+        settings["PORT"] = 18081
+
+        response = self.client.put("/api/v1/settings/", headers=self.auth_headers, json=settings)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["restart_required"])
+        self.assertEqual(self.app.state.config.port, 18081)
+
+    def test_update_settings_restarts_scheduler_when_scheduler_changes(self) -> None:
+        with self.client:
+            old_scheduler = self.app.state.scheduler
+            settings = self.client.get("/api/v1/settings/", headers=self.auth_headers).json()
+            settings["API_TOKEN"]["token"] = {}
+            settings["GOTIFY"]["token"] = {}
+            settings["SCHEDULER"]["COOKIE_CHECK"]["enable"] = True
+            settings["SCHEDULER"]["COOKIE_CHECK"]["interval_seconds"] = 60
+
+            response = self.client.put("/api/v1/settings/", headers=self.auth_headers, json=settings)
+
+            self.assertEqual(response.status_code, 200)
+            self.assertIsNot(self.app.state.scheduler, old_scheduler)
+            self.assertTrue(self.app.state.config.scheduler.cookie_check.enable)
 
 
 class TicketAndRiskServiceTests(unittest.IsolatedAsyncioTestCase):
@@ -873,22 +949,18 @@ class ConfigSchedulerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             cookie_dir = root / "cookies"
-            config_path = root / "config.yaml"
-            config_path.write_text(
-                textwrap.dedent(
-                    f"""
-                    HOST: 127.0.0.1
-                    PORT: 18080
-                    STORAGE:
-                      cookie_dir: "{cookie_dir.as_posix()}"
-                    SCHEDULER:
-                      COOKIE_REFRESH:
-                        enable: true
-                        interval_seconds: 2592000
-                    """
-                ).strip(),
-                encoding="utf-8",
-            )
+            config_path = root / "config.json"
+            config_path.write_text(json.dumps({
+                "HOST": "127.0.0.1",
+                "PORT": 18080,
+                "STORAGE": {"cookie_dir": cookie_dir.as_posix()},
+                "SCHEDULER": {
+                    "COOKIE_REFRESH": {
+                        "enable": True,
+                        "interval_seconds": 2592000,
+                    },
+                },
+            }), encoding="utf-8")
 
             config = load_config(str(config_path))
 
@@ -900,23 +972,19 @@ class ConfigSchedulerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             cookie_dir = root / "cookies"
-            config_path = root / "config.yaml"
-            config_path.write_text(
-                textwrap.dedent(
-                    f"""
-                    HOST: 127.0.0.1
-                    PORT: 18080
-                    STORAGE:
-                      cookie_dir: "{cookie_dir.as_posix()}"
-                    SCHEDULER:
-                      COOKIE_REFRESH:
-                        enable: true
-                        interval_seconds: 2592000
-                        scan_interval_seconds: 3600
-                    """
-                ).strip(),
-                encoding="utf-8",
-            )
+            config_path = root / "config.json"
+            config_path.write_text(json.dumps({
+                "HOST": "127.0.0.1",
+                "PORT": 18080,
+                "STORAGE": {"cookie_dir": cookie_dir.as_posix()},
+                "SCHEDULER": {
+                    "COOKIE_REFRESH": {
+                        "enable": True,
+                        "interval_seconds": 2592000,
+                        "scan_interval_seconds": 3600,
+                    },
+                },
+            }), encoding="utf-8")
 
             config = load_config(str(config_path))
 
@@ -926,30 +994,59 @@ class ConfigSchedulerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             cookie_dir = root / "cookies"
-            config_path = root / "config.yaml"
-            config_path.write_text(
-                textwrap.dedent(
-                    f"""
-                    HOST: 127.0.0.1
-                    PORT: 18080
-                    STORAGE:
-                      cookie_dir: "{cookie_dir.as_posix()}"
-                    SCHEDULER:
-                      RISK_CONTROL_CHECK:
-                        enable: false
-                        interval_seconds: 120
-                    BILI:
-                      risk_control_enabled: true
-                    """
-                ).strip(),
-                encoding="utf-8",
-            )
+            config_path = root / "config.json"
+            config_path.write_text(json.dumps({
+                "HOST": "127.0.0.1",
+                "PORT": 18080,
+                "STORAGE": {"cookie_dir": cookie_dir.as_posix()},
+                "SCHEDULER": {
+                    "RISK_CONTROL_CHECK": {
+                        "enable": False,
+                        "interval_seconds": 120,
+                    },
+                },
+                "BILI": {
+                    "risk_control_enabled": True,
+                },
+            }), encoding="utf-8")
 
             config = load_config(str(config_path))
 
         self.assertTrue(config.bili.risk_control_enabled)
         self.assertFalse(config.scheduler.risk_control_check.enable)
         self.assertEqual(config.scheduler.risk_control_check.interval_seconds, 120)
+
+    def test_default_config_migrates_legacy_yaml_once(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            cookie_dir = root / "cookies"
+            legacy_config = root / "config.yaml"
+            legacy_config.write_text(
+                "\n".join([
+                    "HOST: 127.0.0.1",
+                    "PORT: 18080",
+                    "STORAGE:",
+                    f"  cookie_dir: \"{cookie_dir.as_posix()}\"",
+                    "API_TOKEN:",
+                    "  enable: true",
+                    "  token: migrated-token",
+                ]),
+                encoding="utf-8",
+            )
+
+            old_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                config = load_config()
+            finally:
+                os.chdir(old_cwd)
+
+            migrated_config = root / "data" / "config.json"
+            self.assertTrue(migrated_config.exists())
+            self.assertEqual(config.api_token.token, "migrated-token")
+            self.assertEqual(config.config_path, "data/config.json")
+            saved = json.loads(migrated_config.read_text(encoding="utf-8"))
+            self.assertEqual(saved["API_TOKEN"]["token"], "migrated-token")
 
     def test_ticket_task_not_started_when_scheduler_disabled(self) -> None:
         from core.config.loader import AppConfig, BiliConfig, SchedulerConfig, SchedulerItemConfig

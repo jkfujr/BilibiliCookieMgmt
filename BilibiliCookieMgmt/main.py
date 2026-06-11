@@ -2,14 +2,14 @@ from __future__ import annotations
 
 """
 程序入口: 
-- 加载配置(config.yaml)
+- 加载配置(data/config.json)
 - 构建依赖(仓库与服务)
 - 初始化 FastAPI 并挂载路由
 
 运行: 
   python main.py
 或: 
-  uvicorn new_code.main:app --reload --host 0.0.0.0 --port 18000
+  uvicorn main:app --reload --host 0.0.0.0 --port 18000
 """
 
 import uvicorn, logging
@@ -19,13 +19,13 @@ from fastapi.responses import FileResponse
 from pathlib import Path
 from contextlib import asynccontextmanager
 
-from core.api.routes import auth_router, cookies_router
+from core.api.routes import auth_router, cookies_router, settings_router
 from core.config import load_config
 from core.infrastructure import BilibiliClient
-from core.infrastructure.notifications import GotifyNotificationService, NoopNotificationService
 from core.infrastructure.repositories import CookieRepository
 from core.scheduler import AppScheduler
 from core.services import CookieService
+from core.services.settings_service import build_notification_service
 from core.utils import setup_logging
 
 def create_app() -> FastAPI:
@@ -41,17 +41,7 @@ def create_app() -> FastAPI:
         base_dir=config.storage.cookie_dir,
         bili_ticket_enabled=config.bili.bili_ticket_enabled
     )
-    # 通知服务
-    if config.gotify.enable and config.gotify.url and config.gotify.token:
-        notification = GotifyNotificationService(
-            url=config.gotify.url,
-            token=config.gotify.token,
-            default_title=config.gotify.title,
-            default_priority=config.gotify.priority,
-        )
-    else:
-        notification = NoopNotificationService()
-
+    notification = build_notification_service(config)
     bilibili_client = BilibiliClient()
     service = CookieService(repository=repository, config=config, notification=notification, bilibili_client=bilibili_client)
 
@@ -67,10 +57,12 @@ def create_app() -> FastAPI:
             yield
         finally:
             logger.info("应用程序正在关闭...")
-            await scheduler.stop()
+            current_scheduler = getattr(app.state, "scheduler", scheduler)
+            await current_scheduler.stop()
             try:
-                if hasattr(notification, "aclose"):
-                    await notification.aclose()  # type: ignore
+                current_notification = getattr(app.state, "notification", notification)
+                if hasattr(current_notification, "aclose"):
+                    await current_notification.aclose()  # type: ignore
             except Exception:
                 pass
             try:
@@ -81,9 +73,11 @@ def create_app() -> FastAPI:
     app = FastAPI(title="BilibiliCookieMgmt v2 API", version="2.0.0", lifespan=lifespan)
     app.state.config = config
     app.state.cookie_service = service
+    app.state.notification = notification
 
     app.include_router(cookies_router, prefix="/api/v1")
     app.include_router(auth_router, prefix="/api/v1")
+    app.include_router(settings_router, prefix="/api/v1")
 
     @app.get("/api/v1/health", tags=["health"])
     async def health_check():

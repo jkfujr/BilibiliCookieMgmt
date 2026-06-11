@@ -12,10 +12,15 @@ defineProps({
     type: Boolean,
     required: true,
   },
+  activeView: {
+    type: String,
+    required: true,
+  },
 })
 
 const emit = defineEmits([
   'update:drawer',
+  'change-view',
   'open-login',
   'start-scan',
   'check-all',
@@ -52,6 +57,24 @@ const emit = defineEmits([
         subtitle="API Token 已就绪"
         disabled
         color="success"
+      ></v-list-item>
+
+      <v-divider class="my-4"></v-divider>
+
+      <v-list-subheader>导航</v-list-subheader>
+      <v-list-item
+        prepend-icon="mdi-view-dashboard-outline"
+        title="账号概览"
+        :active="activeView === 'dashboard'"
+        color="primary"
+        @click="emit('change-view', 'dashboard')"
+      ></v-list-item>
+      <v-list-item
+        prepend-icon="mdi-cog-outline"
+        title="设置"
+        :active="activeView === 'settings'"
+        color="primary"
+        @click="emit('change-view', 'settings')"
       ></v-list-item>
 
       <v-divider class="my-4"></v-divider>

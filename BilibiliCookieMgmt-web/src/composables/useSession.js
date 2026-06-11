@@ -38,18 +38,25 @@ export const useSession = ({ showMsg, storage } = {}) => {
       return false
     }
 
-    token.value = nextToken
-    saveStoredApiToken(resolvedStorage, nextToken)
+    setSessionToken(nextToken)
     loginTokenInput.value = ''
     loginDialog.value = false
     return true
   }
 
+  const setSessionToken = (nextToken) => {
+    token.value = nextToken
+    if (nextToken) {
+      saveStoredApiToken(resolvedStorage, nextToken)
+      return
+    }
+    clearStoredApiToken(resolvedStorage)
+  }
+
   const clearSession = () => {
-    token.value = ''
+    setSessionToken('')
     loginTokenInput.value = ''
     loginDialog.value = true
-    clearStoredApiToken(resolvedStorage)
   }
 
   const handleUnauthorized = () => {
@@ -72,6 +79,7 @@ export const useSession = ({ showMsg, storage } = {}) => {
     getToken,
     openLoginDialog,
     applyLoginToken,
+    setSessionToken,
     clearSession,
     handleUnauthorized,
   }

@@ -1,0 +1,40 @@
+{
+  "HOST": "0.0.0.0",
+  "PORT": 18000,
+  "API_TOKEN": {
+    "enable": true,
+    "token": "1145141919810"
+  },
+  "STORAGE": {
+    "cookie_dir": "./data/cookie"
+  },
+  "GOTIFY": {
+    "enable": false,
+    "url": "",
+    "token": "",
+    "priority": 5,
+    "title": "BilibiliCookieMgmt"
+  },
+  "SCHEDULER": {
+    "COOKIE_CHECK": {
+      "enable": true,
+      "interval_seconds": 600
+    },
+    "COOKIE_REFRESH": {
+      "enable": true,
+      "interval_seconds": 2592000,
+      "scan_interval_seconds": 21600
+    },
+    "BILI_TICKET_REFRESH": {
+      "enable": true,
+      "interval_seconds": 43200
+    },
+    "RISK_CONTROL_CHECK": {
+      "interval_seconds": 3600
+    }
+  },
+  "BILI": {
+    "bili_ticket_enabled": false,
+    "risk_control_enabled": false
+  }
+}

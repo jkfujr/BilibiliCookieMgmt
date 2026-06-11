@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any, Dict, Optional
 from pathlib import Path
 import os
 import argparse
+import json
 import yaml
+
+DEFAULT_CONFIG_PATH = "data/config.json"
+LEGACY_CONFIG_PATH = "config.yaml"
 
 
 @dataclass
@@ -58,36 +62,81 @@ class AppConfig:
     gotify: GotifyConfig = field(default_factory=GotifyConfig)
     scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
     bili: BiliConfig = field(default_factory=BiliConfig)
+    config_path: str = DEFAULT_CONFIG_PATH
 
 
 def _ensure_dirs(cfg: AppConfig) -> None:
     os.makedirs(cfg.storage.cookie_dir, exist_ok=True)
 
 
-def load_config(config_path: Optional[str] = None) -> AppConfig:
-    """
-    加载配置
-    """
-    # 优先使用命令行参数指定的配置文件
-    parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument("-c", "--config", help="配置文件路径")
-    args, _ = parser.parse_known_args()
+def config_to_dict(cfg: AppConfig) -> Dict[str, Any]:
+    return {
+        "HOST": cfg.host,
+        "PORT": cfg.port,
+        "API_TOKEN": {
+            "enable": cfg.api_token.enable,
+            "token": cfg.api_token.token,
+        },
+        "STORAGE": {
+            "cookie_dir": cfg.storage.cookie_dir,
+        },
+        "GOTIFY": {
+            "enable": cfg.gotify.enable,
+            "url": cfg.gotify.url,
+            "token": cfg.gotify.token,
+            "priority": cfg.gotify.priority,
+            "title": cfg.gotify.title,
+        },
+        "SCHEDULER": {
+            "COOKIE_CHECK": {
+                "enable": cfg.scheduler.cookie_check.enable,
+                "interval_seconds": cfg.scheduler.cookie_check.interval_seconds,
+            },
+            "COOKIE_REFRESH": {
+                "enable": cfg.scheduler.cookie_refresh.enable,
+                "interval_seconds": cfg.scheduler.cookie_refresh.interval_seconds,
+                "scan_interval_seconds": cfg.scheduler.cookie_refresh.scan_interval_seconds,
+            },
+            "BILI_TICKET_REFRESH": {
+                "enable": cfg.scheduler.bili_ticket_refresh.enable,
+                "interval_seconds": cfg.scheduler.bili_ticket_refresh.interval_seconds,
+            },
+            "RISK_CONTROL_CHECK": {
+                "interval_seconds": cfg.scheduler.risk_control_check.interval_seconds,
+            },
+        },
+        "BILI": {
+            "bili_ticket_enabled": cfg.bili.bili_ticket_enabled,
+            "risk_control_enabled": cfg.bili.risk_control_enabled,
+        },
+    }
 
-    if args.config:
-        config_path = args.config
 
-    if config_path is None:
-        config_path = "config.yaml"
+def save_config_file(cfg: AppConfig, config_path: str | Path | None = None) -> None:
+    path = Path(config_path or cfg.config_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as f:
+        json.dump(config_to_dict(cfg), f, ensure_ascii=False, indent=2)
+        f.write("\n")
 
-    if not os.path.exists(config_path):
-        msg = f"未找到配置文件: {config_path}"
-        if os.path.exists("config.example.yaml"):
-            msg += "。检测到 config.example.yaml，请将其复制为 config.yaml 并根据需要修改配置。"
-        raise FileNotFoundError(msg)
 
-    with open(config_path, "r", encoding="utf-8") as f:
+def _read_json_config(config_path: str | Path) -> Dict[str, Any]:
+    with Path(config_path).open("r", encoding="utf-8") as f:
+        data = json.load(f) or {}
+    if not isinstance(data, dict):
+        raise ValueError("配置文件根节点必须是对象")
+    return data
+
+
+def _read_legacy_yaml_config(config_path: str | Path) -> Dict[str, Any]:
+    with Path(config_path).open("r", encoding="utf-8") as f:
         data = yaml.safe_load(f) or {}
+    if not isinstance(data, dict):
+        raise ValueError("旧配置文件根节点必须是对象")
+    return data
 
+
+def build_config(data: Dict[str, Any], config_path: str | Path = DEFAULT_CONFIG_PATH) -> AppConfig:
     api_token_cfg = data.get("API_TOKEN", {})
     storage_cfg = data.get("STORAGE", {})
     gotify_cfg = data.get("GOTIFY", {})
@@ -98,7 +147,7 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
     risk_check_cfg_src = scheduler_cfg.get("RISK_CONTROL_CHECK", {}) if scheduler_cfg else {}
     bili_cfg = data.get("BILI", {})
 
-    cfg = AppConfig(
+    return AppConfig(
         host=str(data.get("HOST", "0.0.0.0")),
         port=int(data.get("PORT", 18000)),
         api_token=ApiTokenConfig(
@@ -137,7 +186,43 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
             bili_ticket_enabled=bool(bili_cfg.get("bili_ticket_enabled", False)),
             risk_control_enabled=bool(bili_cfg.get("risk_control_enabled", False)),
         ),
+        config_path=Path(config_path).as_posix(),
     )
 
+
+def load_config(config_path: Optional[str] = None) -> AppConfig:
+    """
+    加载配置
+    """
+    # 优先使用命令行参数指定的配置文件
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("-c", "--config", help="配置文件路径")
+    args, _ = parser.parse_known_args()
+
+    if args.config:
+        config_path = args.config
+
+    using_default_path = config_path is None
+    if config_path is None:
+        config_path = DEFAULT_CONFIG_PATH
+
+    config_file = Path(config_path)
+    if config_file.suffix.lower() != ".json":
+        raise ValueError("仅支持 JSON 配置文件，请使用 data/config.json")
+
+    if using_default_path and not config_file.exists() and Path(LEGACY_CONFIG_PATH).exists():
+        data = _read_legacy_yaml_config(LEGACY_CONFIG_PATH)
+        cfg = build_config(data, config_file)
+        save_config_file(cfg, config_file)
+        _ensure_dirs(cfg)
+        return cfg
+
+    if not config_file.exists():
+        msg = f"未找到配置文件: {config_path}"
+        if os.path.exists("config.example.json"):
+            msg += "。检测到 config.example.json，请将其复制为 data/config.json 并根据需要修改配置。"
+        raise FileNotFoundError(msg)
+
+    cfg = build_config(_read_json_config(config_file), config_file)
     _ensure_dirs(cfg)
     return cfg
