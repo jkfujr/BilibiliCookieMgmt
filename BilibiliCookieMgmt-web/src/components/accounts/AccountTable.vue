@@ -1,10 +1,16 @@
 <script setup>
+import { computed } from 'vue'
+
 import TagFilterBar from '../dashboard/TagFilterBar.vue'
 import { getAccountTags } from '../../utils/accountTagUtils'
-import { formatTime, getExpireTime } from '../../utils/accountUtils'
+import { formatTime, getAccountId, getExpireTime } from '../../utils/accountUtils'
 
-defineProps({
+const props = defineProps({
   items: {
+    type: Array,
+    required: true,
+  },
+  selectedAccountIds: {
     type: Array,
     required: true,
   },
@@ -43,6 +49,7 @@ const emit = defineEmits([
   'delete-cookie',
   'clear-filter',
   'start-scan',
+  'update:selected-account-ids',
   'update:selected-tags',
   'update:match-mode',
 ])
@@ -50,11 +57,18 @@ const emit = defineEmits([
 const headers = [
   { title: '用户信息', key: 'user_info', align: 'start', sortable: false },
   { title: '标签', key: 'tags', align: 'start', sortable: false },
-  { title: '是否启用', key: 'is_enabled', align: 'center' },
   { title: 'SESSDATA 过期', key: 'expire_time', align: 'center' },
   { title: '登录状态', key: 'managed.status', align: 'center' },
-  { title: '操作', key: 'actions', align: 'center', sortable: false },
+  { title: '操作', key: 'actions', align: 'end', sortable: false },
 ]
+
+const selectedValues = computed(() => {
+  return props.selectedAccountIds.map((id) => String(id))
+})
+
+const isSameAccountId = (left, right) => {
+  return String(left || '') === String(right || '')
+}
 
 const statusMap = {
   valid: {
@@ -82,15 +96,71 @@ const statusMap = {
 const getStatusDisplay = (status) => {
   return statusMap[status] || statusMap.unknown
 }
+
+const getEnabledText = (account) => {
+  return account?.managed?.is_enabled ? '禁用' : '开启'
+}
+
+const getEnabledIcon = (account) => {
+  return account?.managed?.is_enabled ? 'mdi-toggle-switch-off-outline' : 'mdi-toggle-switch-outline'
+}
+
+const getMenuItems = (account) => [
+  {
+    title: '测试',
+    icon: 'mdi-shield-check-outline',
+    color: 'primary',
+    eventName: 'check-cookie',
+  },
+  {
+    title: getEnabledText(account),
+    icon: getEnabledIcon(account),
+    color: account?.managed?.is_enabled ? 'warning' : 'success',
+    eventName: 'toggle-enabled',
+  },
+  {
+    title: '查看详情',
+    icon: 'mdi-eye-outline',
+    color: 'grey-darken-1',
+    eventName: 'view-cookie',
+  },
+  {
+    title: '编辑标签',
+    icon: 'mdi-tag-edit-outline',
+    color: 'info',
+    eventName: 'edit-tags',
+  },
+  {
+    title: '强制刷新',
+    icon: 'mdi-refresh',
+    color: 'warning',
+    eventName: 'refresh-cookie',
+  },
+  {
+    title: '删除',
+    icon: 'mdi-delete-outline',
+    color: 'error',
+    eventName: 'delete-cookie',
+  },
+]
+
+const emitRowAction = (eventName, account) => {
+  emit(eventName, account)
+}
 </script>
 
 <template>
   <v-data-table
     :headers="headers"
     :items="items"
+    :model-value="selectedValues"
     :loading="loading"
+    item-value="managed.DedeUserID"
+    :value-comparator="isSameAccountId"
+    show-select
     hover
     density="compact"
+    @update:model-value="emit('update:selected-account-ids', $event.map((id) => String(id)))"
   >
     <template #item.user_info="{ item, index }">
       <div class="d-flex flex-row align-center py-1">
@@ -144,18 +214,6 @@ const getStatusDisplay = (status) => {
       </div>
     </template>
 
-    <template #item.is_enabled="{ item }">
-      <v-switch
-        :model-value="item.managed?.is_enabled"
-        color="success"
-        hide-details
-        density="compact"
-        inset
-        class="scale-08"
-        @update:model-value="emit('toggle-enabled', item)"
-      ></v-switch>
-    </template>
-
     <template #item.expire_time="{ item }">
       <div class="text-caption">{{ formatTime(getExpireTime(item)) }}</div>
     </template>
@@ -173,47 +231,50 @@ const getStatusDisplay = (status) => {
     </template>
 
     <template #item.actions="{ item }">
-      <div class="d-flex justify-center">
+      <div class="d-flex justify-end align-center ga-1 action-cell">
         <v-btn
-          icon="mdi-tag-edit-outline"
-          variant="text"
-          size="x-small"
-          color="info"
-          title="编辑标签"
-          @click="emit('edit-tags', item)"
-        ></v-btn>
-        <v-btn
-          icon="mdi-eye-outline"
-          variant="text"
-          size="x-small"
-          color="grey-darken-1"
-          title="查看详情"
-          @click="emit('view-cookie', item)"
-        ></v-btn>
-        <v-btn
-          icon="mdi-shield-check-outline"
-          variant="text"
-          size="x-small"
+          prepend-icon="mdi-shield-check-outline"
+          variant="tonal"
+          size="small"
           color="primary"
-          title="即时检查"
+          slim
           @click="emit('check-cookie', item)"
-        ></v-btn>
+        >
+          测试
+        </v-btn>
         <v-btn
-          icon="mdi-refresh"
-          variant="text"
-          size="x-small"
-          color="warning"
-          title="强制刷新"
-          @click="emit('refresh-cookie', item)"
-        ></v-btn>
-        <v-btn
-          icon="mdi-delete-outline"
-          variant="text"
-          size="x-small"
-          color="error"
-          title="移除账号"
-          @click="emit('delete-cookie', item)"
-        ></v-btn>
+          :prepend-icon="getEnabledIcon(item)"
+          variant="tonal"
+          size="small"
+          :color="item.managed?.is_enabled ? 'warning' : 'success'"
+          slim
+          @click="emit('toggle-enabled', item)"
+        >
+          {{ getEnabledText(item) }}
+        </v-btn>
+
+        <v-menu location="bottom end">
+          <template #activator="{ props: menuProps }">
+            <v-btn
+              v-bind="menuProps"
+              append-icon="mdi-chevron-down"
+              variant="text"
+              size="small"
+            >
+              全部
+            </v-btn>
+          </template>
+          <v-list density="compact" min-width="160">
+            <v-list-item
+              v-for="menuItem in getMenuItems(item)"
+              :key="`${getAccountId(item)}-${menuItem.eventName}`"
+              :prepend-icon="menuItem.icon"
+              :title="menuItem.title"
+              :base-color="menuItem.color"
+              @click="emitRowAction(menuItem.eventName, item)"
+            ></v-list-item>
+          </v-list>
+        </v-menu>
       </div>
     </template>
 
@@ -255,12 +316,11 @@ const getStatusDisplay = (status) => {
   line-height: 1.2 !important;
 }
 
-.scale-08 {
-  transform: scale(0.8);
-  transform-origin: center;
-}
-
 .account-id {
   font-size: 0.7rem;
+}
+
+.action-cell {
+  min-width: 220px;
 }
 </style>

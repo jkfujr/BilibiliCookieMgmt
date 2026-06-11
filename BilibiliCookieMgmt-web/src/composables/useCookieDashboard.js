@@ -10,13 +10,22 @@ import {
   setCookieTags,
   testCookieHeader,
 } from '../api/cookieApi'
-import { extractAvailableTags, filterAccountsByTags, getAccountTags, normalizeTagList } from '../utils/accountTagUtils'
+import {
+  appendAccountTags,
+  extractAvailableTags,
+  filterAccountsByTags,
+  getAccountTags,
+  normalizeTagList,
+} from '../utils/accountTagUtils'
 import {
   calculateAccountStats,
   clearTagFilterState,
   getAccountId,
+  getToggledEnabledValue,
+  normalizeAccountIds,
   removeAccountFromList,
   replaceAccountInList,
+  syncSelectedAccountIds as syncAccountSelection,
 } from '../utils/accountUtils'
 import { runManagedRequest } from '../utils/requestUtils'
 
@@ -27,6 +36,7 @@ export const useCookieDashboard = ({ apiClient, token, showMsg } = {}) => {
 
   const selectedTags = ref([])
   const tagMatchMode = ref('any')
+  const selectedAccountIds = ref([])
 
   const cookieDialog = ref(false)
   const currentCookie = ref({ account: null, simple: '', complete: '' })
@@ -35,12 +45,95 @@ export const useCookieDashboard = ({ apiClient, token, showMsg } = {}) => {
   const tagDialog = ref(false)
   const tagTarget = ref(null)
   const tagEditorInput = ref([])
+  const tagDialogMode = ref('single')
+  const bulkTagCount = ref(0)
 
   const testCookieDialog = ref(false)
   const testCookieInput = ref('')
 
   const deleteDialog = ref(false)
   const deleteTarget = ref(null)
+  const deleteDialogMode = ref('single')
+  const bulkDeleteCount = ref(0)
+
+  const selectedAccountCount = computed(() => selectedAccountIds.value.length)
+
+  const setSelectedAccountIds = (ids) => {
+    selectedAccountIds.value = normalizeAccountIds(ids)
+  }
+
+  const clearSelectedAccounts = () => {
+    selectedAccountIds.value = []
+  }
+
+  const getSelectedAccountIds = () => {
+    return normalizeAccountIds(selectedAccountIds.value)
+  }
+
+  const getSelectedAccounts = () => {
+    const selectedIds = new Set(getSelectedAccountIds())
+    return accounts.value.filter((account) => selectedIds.has(getAccountId(account)))
+  }
+
+  const syncSelectedAccountIds = () => {
+    selectedAccountIds.value = syncAccountSelection(selectedAccountIds.value, accounts.value)
+  }
+
+  const getSelectedIdsOrWarn = () => {
+    const ids = getSelectedAccountIds()
+    if (!ids.length) {
+      showMsg?.('请先选择账号', 'warning')
+    }
+    return ids
+  }
+
+  const getBatchMessage = (label, result) => {
+    const total = Number(result?.total ?? 0)
+    const succeeded = Number(result?.succeeded ?? result?.refreshed ?? 0)
+    const failed = Number(result?.failed ?? 0)
+    return `${label}完成：共 ${total} 个，成功 ${succeeded} 个，失败 ${failed} 个`
+  }
+
+  const runSequentialBatch = async ({ items, action }) => {
+    let succeeded = 0
+    let failed = 0
+
+    for (const item of items) {
+      try {
+        const result = await action(item)
+        if (result?.ok === false) {
+          failed += 1
+        } else {
+          succeeded += 1
+        }
+      } catch (error) {
+        failed += 1
+      }
+    }
+
+    return {
+      ok: failed === 0,
+      total: items.length,
+      succeeded,
+      failed,
+    }
+  }
+
+  const runBatchWithLoading = async ({ items, action, successLabel, emptyMessage }) => {
+    if (!items.length) {
+      showMsg?.(emptyMessage || '请先选择账号', 'warning')
+      return { ok: false }
+    }
+
+    loading.value = true
+    try {
+      const result = await runSequentialBatch({ items, action })
+      showMsg?.(getBatchMessage(successLabel, result), result.failed ? 'warning' : 'success')
+      return result
+    } finally {
+      loading.value = false
+    }
+  }
 
   const replaceAccount = (updatedDoc) => {
     accounts.value = replaceAccountInList(accounts.value, updatedDoc)
@@ -48,22 +141,28 @@ export const useCookieDashboard = ({ apiClient, token, showMsg } = {}) => {
 
   const removeAccount = (dedeUserID) => {
     accounts.value = removeAccountFromList(accounts.value, dedeUserID)
+    syncSelectedAccountIds()
   }
 
   const resetTransientState = () => {
     accounts.value = []
     selectedTags.value = []
     tagMatchMode.value = 'any'
+    selectedAccountIds.value = []
     cookieDialog.value = false
     currentCookie.value = { account: null, simple: '', complete: '' }
     currentCookieTab.value = 'simple'
     tagDialog.value = false
     tagTarget.value = null
     tagEditorInput.value = []
+    tagDialogMode.value = 'single'
+    bulkTagCount.value = 0
     testCookieDialog.value = false
     testCookieInput.value = ''
     deleteDialog.value = false
     deleteTarget.value = null
+    deleteDialogMode.value = 'single'
+    bulkDeleteCount.value = 0
   }
 
   const fetchAccounts = async () => {
@@ -82,6 +181,7 @@ export const useCookieDashboard = ({ apiClient, token, showMsg } = {}) => {
       },
       onSuccess: (result) => {
         accounts.value = Array.isArray(result) ? result : []
+        syncSelectedAccountIds()
       },
     })
   }
@@ -136,13 +236,53 @@ export const useCookieDashboard = ({ apiClient, token, showMsg } = {}) => {
     })
   }
 
+  const runSelectedCheck = async () => {
+    const ids = getSelectedIdsOrWarn()
+    if (!ids.length) {
+      return { ok: false }
+    }
+
+    return runManagedRequest({
+      request: () => checkCookies(apiClient, { ids }),
+      showMsg,
+      errorMessage: '检查请求失败',
+      setLoading: (value) => {
+        loading.value = value
+      },
+      refreshAccounts: fetchAccounts,
+      shouldRefresh: true,
+      getSuccessMessage: (result) => getBatchMessage('状态检查', result),
+      getSuccessColor: (result) => Number(result?.failed || 0) > 0 ? 'warning' : 'success',
+    })
+  }
+
+  const runSelectedRefresh = async () => {
+    const ids = getSelectedIdsOrWarn()
+    if (!ids.length) {
+      return { ok: false }
+    }
+
+    return runManagedRequest({
+      request: () => refreshCookies(apiClient, { ids }),
+      showMsg,
+      errorMessage: '刷新请求失败',
+      setLoading: (value) => {
+        loading.value = value
+      },
+      refreshAccounts: fetchAccounts,
+      shouldRefresh: true,
+      getSuccessMessage: (result) => getBatchMessage('自动刷新', result),
+      getSuccessColor: (result) => Number(result?.failed || 0) > 0 ? 'warning' : 'success',
+    })
+  }
+
   const toggleEnabled = async (account) => {
     const dedeUserID = getAccountId(account)
     if (!dedeUserID) {
       return { ok: false }
     }
 
-    const nextEnabled = !Boolean(account?.managed?.is_enabled)
+    const nextEnabled = getToggledEnabledValue(account)
     return runManagedRequest({
       request: () => setCookieEnabled(apiClient, dedeUserID, nextEnabled),
       showMsg,
@@ -153,9 +293,39 @@ export const useCookieDashboard = ({ apiClient, token, showMsg } = {}) => {
     })
   }
 
+  const toggleSelectedEnabled = async () => {
+    const selectedAccounts = getSelectedAccounts()
+    return runBatchWithLoading({
+      items: selectedAccounts,
+      successLabel: '开启/禁用',
+      action: async (account) => {
+        const dedeUserID = getAccountId(account)
+        const updatedDoc = await setCookieEnabled(apiClient, dedeUserID, getToggledEnabledValue(account))
+        replaceAccount(updatedDoc)
+        return { ok: true }
+      },
+    })
+  }
+
   const openTagDialog = (account) => {
+    tagDialogMode.value = 'single'
     tagTarget.value = account
     tagEditorInput.value = getAccountTags(account)
+    bulkTagCount.value = 0
+    tagDialog.value = true
+  }
+
+  const openBulkTagDialog = () => {
+    const selectedAccounts = getSelectedAccounts()
+    if (!selectedAccounts.length) {
+      showMsg?.('请先选择账号', 'warning')
+      return
+    }
+
+    tagDialogMode.value = 'bulk'
+    tagTarget.value = null
+    tagEditorInput.value = []
+    bulkTagCount.value = selectedAccounts.length
     tagDialog.value = true
   }
 
@@ -163,9 +333,11 @@ export const useCookieDashboard = ({ apiClient, token, showMsg } = {}) => {
     tagDialog.value = false
     tagTarget.value = null
     tagEditorInput.value = []
+    tagDialogMode.value = 'single'
+    bulkTagCount.value = 0
   }
 
-  const saveTags = async () => {
+  const saveSingleTags = async () => {
     const dedeUserID = getAccountId(tagTarget.value)
     if (!dedeUserID) {
       return { ok: false }
@@ -183,6 +355,39 @@ export const useCookieDashboard = ({ apiClient, token, showMsg } = {}) => {
         closeTagDialog()
       },
     })
+  }
+
+  const saveBulkTags = async () => {
+    const tagsToAppend = normalizeTagList(tagEditorInput.value)
+    if (!tagsToAppend.length) {
+      showMsg?.('请输入要追加的标签', 'warning')
+      return { ok: false }
+    }
+
+    const result = await runBatchWithLoading({
+      items: getSelectedAccounts(),
+      successLabel: '标签追加',
+      action: async (account) => {
+        const dedeUserID = getAccountId(account)
+        const updatedDoc = await setCookieTags(apiClient, dedeUserID, appendAccountTags(account, tagsToAppend))
+        replaceAccount(updatedDoc)
+        return { ok: true }
+      },
+    })
+
+    if (result.ok) {
+      closeTagDialog()
+    }
+
+    return result
+  }
+
+  const saveTags = async () => {
+    if (tagDialogMode.value === 'bulk') {
+      return saveBulkTags()
+    }
+
+    return saveSingleTags()
   }
 
   const closeCookieDialog = () => {
@@ -280,16 +485,33 @@ export const useCookieDashboard = ({ apiClient, token, showMsg } = {}) => {
   }
 
   const requestDelete = (account) => {
+    deleteDialogMode.value = 'single'
     deleteTarget.value = account
+    bulkDeleteCount.value = 0
+    deleteDialog.value = true
+  }
+
+  const requestBulkDelete = () => {
+    const selectedAccounts = getSelectedAccounts()
+    if (!selectedAccounts.length) {
+      showMsg?.('请先选择账号', 'warning')
+      return
+    }
+
+    deleteDialogMode.value = 'bulk'
+    deleteTarget.value = null
+    bulkDeleteCount.value = selectedAccounts.length
     deleteDialog.value = true
   }
 
   const closeDeleteDialog = () => {
     deleteDialog.value = false
     deleteTarget.value = null
+    deleteDialogMode.value = 'single'
+    bulkDeleteCount.value = 0
   }
 
-  const deleteCookie = async () => {
+  const deleteSingleCookie = async () => {
     const dedeUserID = getAccountId(deleteTarget.value)
     if (!dedeUserID) {
       return { ok: false }
@@ -305,6 +527,34 @@ export const useCookieDashboard = ({ apiClient, token, showMsg } = {}) => {
         closeDeleteDialog()
       },
     })
+  }
+
+  const deleteSelectedCookies = async () => {
+    const result = await runBatchWithLoading({
+      items: getSelectedAccounts(),
+      successLabel: '删除',
+      action: async (account) => {
+        const dedeUserID = getAccountId(account)
+        await deleteCookieById(apiClient, dedeUserID)
+        removeAccount(dedeUserID)
+        return { ok: true }
+      },
+    })
+
+    if (result.ok) {
+      closeDeleteDialog()
+      clearSelectedAccounts()
+    }
+
+    return result
+  }
+
+  const deleteCookie = async () => {
+    if (deleteDialogMode.value === 'bulk') {
+      return deleteSelectedCookies()
+    }
+
+    return deleteSingleCookie()
   }
 
   const openTestCookieDialog = () => {
@@ -348,12 +598,22 @@ export const useCookieDashboard = ({ apiClient, token, showMsg } = {}) => {
     { immediate: true }
   )
 
+  watch(
+    accounts,
+    () => {
+      syncSelectedAccountIds()
+    },
+    { deep: true }
+  )
+
   return {
     accounts,
     availableTags,
     filteredAccounts,
     loading,
     screenshotMode,
+    selectedAccountIds,
+    selectedAccountCount,
     selectedTags,
     stats,
     tagMatchMode,
@@ -361,27 +621,42 @@ export const useCookieDashboard = ({ apiClient, token, showMsg } = {}) => {
     currentCookie,
     currentCookieTab,
     tagDialog,
+    tagDialogMode,
     tagTarget,
     tagEditorInput,
+    bulkTagCount,
     testCookieDialog,
     testCookieInput,
     deleteDialog,
+    deleteDialogMode,
     deleteTarget,
+    bulkDeleteCount,
     fetchAccounts,
     clearTagFilter,
     toggleScreenshotMode,
     checkAllCookies,
     refreshAllCookies,
+    setSelectedAccountIds,
+    clearSelectedAccounts,
+    getSelectedAccounts,
+    getSelectedAccountIds,
+    syncSelectedAccountIds,
+    runSelectedCheck,
+    runSelectedRefresh,
     toggleEnabled,
+    toggleSelectedEnabled,
     openTagDialog,
+    openBulkTagDialog,
     closeTagDialog,
     saveTags,
+    saveBulkTags,
     closeCookieDialog,
     viewCookie,
     copyContent,
     checkCookie,
     refreshCookie,
     requestDelete,
+    requestBulkDelete,
     closeDeleteDialog,
     deleteCookie,
     openTestCookieDialog,

@@ -3,6 +3,7 @@ import { ref } from 'vue'
 
 import { createApiClient } from './api/client'
 import AccountTable from './components/accounts/AccountTable.vue'
+import BulkActionBar from './components/accounts/BulkActionBar.vue'
 import StatsCards from './components/dashboard/StatsCards.vue'
 import CookieDetailDrawer from './components/dialogs/CookieDetailDrawer.vue'
 import DeleteConfirmDialog from './components/dialogs/DeleteConfirmDialog.vue'
@@ -54,6 +55,8 @@ const {
   filteredAccounts,
   loading,
   screenshotMode,
+  selectedAccountIds,
+  selectedAccountCount,
   selectedTags,
   stats,
   tagMatchMode,
@@ -61,19 +64,27 @@ const {
   currentCookie,
   currentCookieTab,
   tagDialog,
+  tagDialogMode,
   tagTarget,
   tagEditorInput,
+  bulkTagCount,
   testCookieDialog,
   testCookieInput,
   deleteDialog,
+  deleteDialogMode,
   deleteTarget,
+  bulkDeleteCount,
   fetchAccounts,
   clearTagFilter,
   toggleScreenshotMode,
-  checkAllCookies,
-  refreshAllCookies,
+  setSelectedAccountIds,
+  clearSelectedAccounts,
+  runSelectedCheck,
+  runSelectedRefresh,
   toggleEnabled,
+  toggleSelectedEnabled,
   openTagDialog,
+  openBulkTagDialog,
   closeTagDialog,
   saveTags,
   closeCookieDialog,
@@ -82,6 +93,7 @@ const {
   checkCookie,
   refreshCookie,
   requestDelete,
+  requestBulkDelete,
   closeDeleteDialog,
   deleteCookie,
   openTestCookieDialog,
@@ -197,8 +209,6 @@ const handleSettingsSaved = ({ result, apiToken }) => {
       @change-view="changeView"
       @open-login="openLoginDialog"
       @start-scan="startScan"
-      @check-all="checkAllCookies"
-      @refresh-all="refreshAllCookies"
       @open-test="openTestCookieDialog"
       @toggle-screenshot="toggleScreenshotMode"
     />
@@ -227,8 +237,20 @@ const handleSettingsSaved = ({ result, apiToken }) => {
 
             <v-divider></v-divider>
 
+            <BulkActionBar
+              :selected-count="selectedAccountCount"
+              :loading="loading"
+              @check-selected="runSelectedCheck"
+              @refresh-selected="runSelectedRefresh"
+              @toggle-selected-enabled="toggleSelectedEnabled"
+              @edit-selected-tags="openBulkTagDialog"
+              @delete-selected="requestBulkDelete"
+              @clear-selection="clearSelectedAccounts"
+            />
+
             <AccountTable
               :items="filteredAccounts"
+              :selected-account-ids="selectedAccountIds"
               :loading="loading"
               :screenshot-mode="screenshotMode"
               :has-tag-filter="selectedTags.length > 0"
@@ -243,6 +265,7 @@ const handleSettingsSaved = ({ result, apiToken }) => {
               @delete-cookie="requestDelete"
               @clear-filter="clearTagFilter"
               @start-scan="startScan"
+              @update:selected-account-ids="setSelectedAccountIds"
               @update:selected-tags="updateSelectedTags"
               @update:match-mode="updateTagMatchMode"
             />
@@ -286,6 +309,8 @@ const handleSettingsSaved = ({ result, apiToken }) => {
 
     <TagEditorDialog
       :model-value="tagDialog"
+      :mode="tagDialogMode"
+      :bulk-count="bulkTagCount"
       :target="tagTarget"
       :available-tags="availableTags"
       :tag-editor-input="tagEditorInput"
@@ -304,6 +329,8 @@ const handleSettingsSaved = ({ result, apiToken }) => {
 
     <DeleteConfirmDialog
       :model-value="deleteDialog"
+      :mode="deleteDialogMode"
+      :bulk-count="bulkDeleteCount"
       :target="deleteTarget"
       @update:model-value="updateDeleteDialog"
       @confirm="deleteCookie"

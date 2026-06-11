@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
+  appendAccountTags,
   extractAvailableTags,
   filterAccountsByTags,
   getAccountTags,
@@ -38,6 +39,10 @@ test('normalizeTagList 会裁剪空白并去重', () => {
 test('getAccountTags 会兼容缺失标签字段', () => {
   assert.deepEqual(getAccountTags({ managed: {} }), [])
   assert.deepEqual(getAccountTags({}), [])
+})
+
+test('appendAccountTags 会保留原标签并追加去重后的新标签', () => {
+  assert.deepEqual(appendAccountTags(accounts[0], ['直播', ' 新标签 ', '', '主力号']), ['主力号', '直播', '新标签'])
 })
 
 test('extractAvailableTags 会按首次出现顺序汇总标签', () => {

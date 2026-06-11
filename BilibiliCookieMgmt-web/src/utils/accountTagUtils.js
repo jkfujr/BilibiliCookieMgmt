@@ -22,6 +22,10 @@ export const getAccountTags = (account) => {
   return normalizeTagList(account?.managed?.tags || [])
 }
 
+export const appendAccountTags = (account, tags) => {
+  return normalizeTagList([...getAccountTags(account), ...normalizeTagList(tags)])
+}
+
 export const extractAvailableTags = (accounts) => {
   const available = []
   const seen = new Set()

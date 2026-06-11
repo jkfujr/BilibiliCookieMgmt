@@ -16,6 +16,35 @@ export const getAccountId = (account) => {
   return dedeUserID ? String(dedeUserID) : ''
 }
 
+export const normalizeAccountIds = (ids) => {
+  if (!Array.isArray(ids)) {
+    return []
+  }
+
+  const normalized = []
+  const seen = new Set()
+
+  ids.forEach((id) => {
+    const value = String(id || '').trim()
+    if (!value || seen.has(value)) {
+      return
+    }
+    seen.add(value)
+    normalized.push(value)
+  })
+
+  return normalized
+}
+
+export const syncSelectedAccountIds = (selectedIds, accounts) => {
+  const availableIds = new Set((Array.isArray(accounts) ? accounts : []).map(getAccountId).filter(Boolean))
+  return normalizeAccountIds(selectedIds).filter((id) => availableIds.has(id))
+}
+
+export const getToggledEnabledValue = (account) => {
+  return !Boolean(account?.managed?.is_enabled)
+}
+
 export const getExpireTime = (account) => {
   const cookies = account?.raw?.cookie_info?.cookies || []
   const sessionCookie = cookies.find((cookie) => cookie.name === 'SESSDATA')

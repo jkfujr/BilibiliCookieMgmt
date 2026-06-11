@@ -23,8 +23,6 @@ const emit = defineEmits([
   'change-view',
   'open-login',
   'start-scan',
-  'check-all',
-  'refresh-all',
   'open-test',
   'toggle-screenshot',
 ])
@@ -86,18 +84,6 @@ const emit = defineEmits([
         color="success"
         class="mb-2"
         @click="emit('start-scan')"
-      ></v-list-item>
-
-      <v-list-subheader>全局管理</v-list-subheader>
-      <v-list-item
-        prepend-icon="mdi-shield-check-outline"
-        title="批量状态检查"
-        @click="emit('check-all')"
-      ></v-list-item>
-      <v-list-item
-        prepend-icon="mdi-autorenew"
-        title="批量自动刷新"
-        @click="emit('refresh-all')"
       ></v-list-item>
 
       <v-divider class="my-4"></v-divider>

@@ -1,8 +1,18 @@
 <script setup>
-defineProps({
+import { computed } from 'vue'
+
+const props = defineProps({
   modelValue: {
     type: Boolean,
     required: true,
+  },
+  mode: {
+    type: String,
+    default: 'single',
+  },
+  bulkCount: {
+    type: Number,
+    default: 0,
   },
   target: {
     type: Object,
@@ -11,6 +21,16 @@ defineProps({
 })
 
 const emit = defineEmits(['update:modelValue', 'confirm', 'cancel'])
+
+const isBulkMode = computed(() => props.mode === 'bulk')
+const title = computed(() => isBulkMode.value ? '确认批量移除账号' : '确认移除账号')
+const message = computed(() => {
+  if (isBulkMode.value) {
+    return `确定要从系统中永久移除选中的 ${props.bulkCount} 个账号吗？`
+  }
+
+  return `确定要从系统中永久移除用户 ${props.target?.managed?.username || props.target?.managed?.DedeUserID || ''} 吗？`
+})
 </script>
 
 <template>
@@ -19,10 +39,10 @@ const emit = defineEmits(['update:modelValue', 'confirm', 'cancel'])
     max-width="400"
     @update:model-value="emit('update:modelValue', $event)"
   >
-    <v-card prepend-icon="mdi-alert-outline" title="确认移除账号">
+    <v-card prepend-icon="mdi-alert-outline" :title="title">
       <v-card-text>
-        确定要从系统中永久移除用户 <span class="font-weight-bold text-error">{{ target?.managed?.username }}</span> 吗？
-        此操作将同步停止该账号的所有自动刷新任务。
+        <span class="font-weight-bold text-error">{{ message }}</span>
+        此操作将同步停止相关账号的所有自动刷新任务。
       </v-card-text>
       <v-card-actions>
         <v-spacer></v-spacer>

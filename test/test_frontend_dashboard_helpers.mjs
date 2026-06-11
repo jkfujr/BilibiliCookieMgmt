@@ -1,7 +1,12 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { clearTagFilterState } from '../BilibiliCookieMgmt-web/src/utils/accountUtils.js'
+import {
+  clearTagFilterState,
+  getToggledEnabledValue,
+  normalizeAccountIds,
+  syncSelectedAccountIds,
+} from '../BilibiliCookieMgmt-web/src/utils/accountUtils.js'
 import { getQrLoginPollState, getQrLoginStatusText, QR_LOGIN_POLL_STATE } from '../BilibiliCookieMgmt-web/src/utils/qrLoginUtils.js'
 import { runManagedRequest } from '../BilibiliCookieMgmt-web/src/utils/requestUtils.js'
 import { buildUnauthorizedSessionState } from '../BilibiliCookieMgmt-web/src/utils/sessionUtils.js'
@@ -12,6 +17,25 @@ test('clearTagFilterState 只清空标签选择，不重置匹配模式', () => 
     selectedTags: [],
     matchMode: 'all',
   })
+})
+
+test('normalizeAccountIds 会去空值、去重并转成字符串', () => {
+  assert.deepEqual(normalizeAccountIds(['1001', 1002, '1001', '', null, ' 1003 ']), ['1001', '1002', '1003'])
+})
+
+test('syncSelectedAccountIds 会清理不存在的选中账号', () => {
+  const accounts = [
+    { managed: { DedeUserID: '1001' } },
+    { managed: { DedeUserID: 1002 } },
+  ]
+
+  assert.deepEqual(syncSelectedAccountIds(['1001', '1002', '404'], accounts), ['1001', '1002'])
+})
+
+test('getToggledEnabledValue 会按当前启用状态取反', () => {
+  assert.equal(getToggledEnabledValue({ managed: { is_enabled: true } }), false)
+  assert.equal(getToggledEnabledValue({ managed: { is_enabled: false } }), true)
+  assert.equal(getToggledEnabledValue({ managed: {} }), true)
 })
 
 test('二维码轮询状态按当前 API 契约判断成功、过期与等待', () => {
