@@ -3,15 +3,17 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 from pathlib import Path
-import os
 import argparse
 import json
 import logging
 import secrets
 import yaml
 
-DEFAULT_CONFIG_PATH = "data/config.json"
-LEGACY_CONFIG_PATH = "config.yaml"
+APP_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_CONFIG_FILE = APP_ROOT / "data" / "config.json"
+DEFAULT_COOKIE_DIR = APP_ROOT / "data" / "cookie"
+LEGACY_CONFIG_FILE = APP_ROOT / "config.yaml"
+DEFAULT_CONFIG_PATH = DEFAULT_CONFIG_FILE.as_posix()
 logger = logging.getLogger(__name__)
 
 
@@ -23,7 +25,7 @@ class ApiTokenConfig:
 
 @dataclass
 class StorageConfig:
-    cookie_dir: str = "./data/cookie"
+    cookie_dir: str = DEFAULT_COOKIE_DIR.as_posix()
 
 
 @dataclass
@@ -74,7 +76,7 @@ class AppConfig:
 
 
 def _ensure_dirs(cfg: AppConfig) -> None:
-    os.makedirs(cfg.storage.cookie_dir, exist_ok=True)
+    Path(cfg.storage.cookie_dir).mkdir(parents=True, exist_ok=True)
 
 
 def config_to_dict(cfg: AppConfig) -> Dict[str, Any]:
@@ -160,7 +162,7 @@ def _build_default_config_data(token: str) -> Dict[str, Any]:
             "token": token,
         },
         "STORAGE": {
-            "cookie_dir": "./data/cookie",
+            "cookie_dir": DEFAULT_COOKIE_DIR.as_posix(),
         },
         "GOTIFY": {
             "enable": False,
@@ -212,7 +214,7 @@ def build_config(data: Dict[str, Any], config_path: str | Path = DEFAULT_CONFIG_
             token=str(api_token_cfg.get("token", "")),
         ),
         storage=StorageConfig(
-            cookie_dir=str(storage_cfg.get("cookie_dir", "./data/cookie")),
+            cookie_dir=str(storage_cfg.get("cookie_dir", DEFAULT_COOKIE_DIR.as_posix())),
         ),
         gotify=GotifyConfig(
             enable=bool(gotify_cfg.get("enable", False)),
@@ -258,37 +260,37 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
     if args.config:
         config_path = args.config
 
-    using_default_path = config_path is None
-    if config_path is None:
-        config_path = DEFAULT_CONFIG_PATH
+    explicit_config = config_path is not None
+    config_file = Path(config_path) if explicit_config else DEFAULT_CONFIG_FILE
 
-    config_file = Path(config_path)
     if config_file.suffix.lower() != ".json":
         raise ValueError("仅支持 JSON 配置文件，请使用 data/config.json")
 
-    if using_default_path and not config_file.exists() and Path(LEGACY_CONFIG_PATH).exists():
-        data = _read_legacy_yaml_config(LEGACY_CONFIG_PATH)
+    if explicit_config:
+        if not config_file.exists():
+            raise FileNotFoundError(f"未找到配置文件: {config_file}")
+        cfg = build_config(_read_json_config(config_file), config_file)
+        _ensure_dirs(cfg)
+        return cfg
+
+    if config_file.exists():
+        cfg = build_config(_read_json_config(config_file), config_file)
+        _ensure_dirs(cfg)
+        return cfg
+
+    if LEGACY_CONFIG_FILE.exists():
+        data = _read_legacy_yaml_config(LEGACY_CONFIG_FILE)
         cfg = build_config(data, config_file)
         save_config_file(cfg, config_file)
         _ensure_dirs(cfg)
+        logger.warning(f"已迁移旧配置到: {cfg.config_path}")
         return cfg
 
-    if using_default_path and not config_file.exists():
-        token = _generate_api_token()
-        data = _build_default_config_data(token)
-        _write_config_data(config_file, data)
-        cfg = build_config(data, config_file)
-        _ensure_dirs(cfg)
-        logger.warning(f"已生成默认配置: {cfg.config_path}")
-        logger.warning(f"初始 API Token: {token}")
-        return cfg
-
-    if not config_file.exists():
-        msg = f"未找到配置文件: {config_path}"
-        if os.path.exists("config.example.json"):
-            msg += "。检测到 config.example.json，可参考该文件创建配置。"
-        raise FileNotFoundError(msg)
-
-    cfg = build_config(_read_json_config(config_file), config_file)
+    token = _generate_api_token()
+    data = _build_default_config_data(token)
+    _write_config_data(config_file, data)
+    cfg = build_config(data, config_file)
     _ensure_dirs(cfg)
+    logger.warning(f"已生成默认配置: {cfg.config_path}")
+    logger.warning(f"初始 API Token: {token}")
     return cfg

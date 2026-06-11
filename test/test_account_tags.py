@@ -20,6 +20,7 @@ BACKEND_DIR = REPO_ROOT / "BilibiliCookieMgmt"
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
+import core.config.loader as config_loader
 from core.infrastructure.repositories.cookie_repository import CookieRepository
 from core.infrastructure.bilibili_client import BilibiliClient
 from core.services.cookie_service import CookieService
@@ -1034,6 +1035,7 @@ class ConfigSchedulerTests(unittest.TestCase):
     def test_default_config_migrates_legacy_yaml_once(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
+            default_config = root / "data" / "config.json"
             cookie_dir = root / "cookies"
             legacy_config = root / "config.yaml"
             legacy_config.write_text(
@@ -1049,43 +1051,68 @@ class ConfigSchedulerTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            old_cwd = Path.cwd()
+            old_default = config_loader.DEFAULT_CONFIG_FILE
+            old_legacy = config_loader.LEGACY_CONFIG_FILE
             try:
-                os.chdir(root)
-                config = load_config()
+                config_loader.DEFAULT_CONFIG_FILE = default_config
+                config_loader.LEGACY_CONFIG_FILE = legacy_config
+                with self.assertLogs("core.config.loader", level="WARNING") as logs:
+                    config = load_config()
             finally:
-                os.chdir(old_cwd)
+                config_loader.DEFAULT_CONFIG_FILE = old_default
+                config_loader.LEGACY_CONFIG_FILE = old_legacy
 
-            migrated_config = root / "data" / "config.json"
-            self.assertTrue(migrated_config.exists())
+            self.assertTrue(default_config.exists())
             self.assertEqual(config.api_token.token, "migrated-token")
-            self.assertEqual(config.config_path, "data/config.json")
-            saved = json.loads(migrated_config.read_text(encoding="utf-8"))
+            self.assertEqual(config.config_path, default_config.as_posix())
+            saved = json.loads(default_config.read_text(encoding="utf-8"))
             self.assertEqual(saved["API_TOKEN"]["token"], "migrated-token")
+            self.assertIn(f"已迁移旧配置到: {default_config.as_posix()}", "\n".join(logs.output))
 
     def test_default_config_generates_when_missing(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
+            default_config = root / "data" / "config.json"
+            default_cookie_dir = root / "data" / "cookie"
+            legacy_config = root / "config.yaml"
+            other_cwd = root / "other-cwd"
+            other_cwd.mkdir()
+            (other_cwd / "config.yaml").write_text(
+                "API_TOKEN:\n  enable: true\n  token: cwd-token\n",
+                encoding="utf-8",
+            )
+            old_default = config_loader.DEFAULT_CONFIG_FILE
+            old_cookie = config_loader.DEFAULT_COOKIE_DIR
+            old_legacy = config_loader.LEGACY_CONFIG_FILE
             old_cwd = Path.cwd()
             try:
-                os.chdir(root)
+                config_loader.DEFAULT_CONFIG_FILE = default_config
+                config_loader.DEFAULT_COOKIE_DIR = default_cookie_dir
+                config_loader.LEGACY_CONFIG_FILE = legacy_config
+                os.chdir(other_cwd)
                 with self.assertLogs("core.config.loader", level="WARNING") as logs:
                     config = load_config()
                 with self.assertNoLogs("core.config.loader", level="WARNING"):
                     reloaded = load_config()
             finally:
                 os.chdir(old_cwd)
+                config_loader.DEFAULT_CONFIG_FILE = old_default
+                config_loader.DEFAULT_COOKIE_DIR = old_cookie
+                config_loader.LEGACY_CONFIG_FILE = old_legacy
 
-            generated_config = root / "data" / "config.json"
-            self.assertTrue(generated_config.exists())
+            self.assertTrue(default_config.exists())
+            self.assertTrue(default_cookie_dir.exists())
+            self.assertFalse((other_cwd / "data" / "config.json").exists())
             self.assertTrue(config.api_token.enable)
             self.assertTrue(config.api_token.token)
+            self.assertNotEqual(config.api_token.token, "cwd-token")
             self.assertEqual(reloaded.api_token.token, config.api_token.token)
 
-            saved = json.loads(generated_config.read_text(encoding="utf-8"))
+            saved = json.loads(default_config.read_text(encoding="utf-8"))
             self.assertTrue(saved["API_TOKEN"]["enable"])
             self.assertEqual(saved["API_TOKEN"]["token"], config.api_token.token)
-            self.assertIn("已生成默认配置: data/config.json", "\n".join(logs.output))
+            self.assertEqual(saved["STORAGE"]["cookie_dir"], default_cookie_dir.as_posix())
+            self.assertIn(f"已生成默认配置: {default_config.as_posix()}", "\n".join(logs.output))
             self.assertIn(f"初始 API Token: {config.api_token.token}", "\n".join(logs.output))
 
     def test_explicit_missing_config_still_raises(self) -> None:

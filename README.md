@@ -22,7 +22,7 @@
 从 [发行版](https://github.com/jkfujr/BilibiliCookieMgmt/releases) 下载对应系统的最新构建。
 
 1. 解压下载的压缩包。
-2. 运行可执行文件，首次启动会自动生成 `data/config.json` 并在控制台输出初始 API Token。
+2. 运行可执行文件，首次启动会在程序目录下自动生成 `data/config.json` 并在控制台输出初始 API Token。
    - `config.example.json` 仅作为配置参考。
    - 若仍存在旧版根目录 `config.yaml`，首次启动会自动迁移到 `data/config.json`。
    - Windows: 双击 `BilibiliCookieMgmt-CLI-win-x64.exe`
@@ -44,7 +44,7 @@
 docker pull ghcr.io/jkfujr/bilibilicookiemgmt:latest
 ```
 
-2. 启动服务。首次启动会在挂载的 `data` 目录内生成 `config.json`，并在容器日志中输出初始 API Token。
+2. 启动服务。首次启动会在容器 `/app/data/config.json` 生成配置；挂载 `./data:/app/data` 后会写入宿主机的 `./data/config.json`，并在容器日志中输出初始 API Token。
 
 ```bash
 docker run -d --name bilibili-cookie-mgmt \
@@ -72,6 +72,8 @@ cd BilibiliCookieMgmt
 pip install fastapi uvicorn pyyaml httpx aiofiles
 python main.py
 ```
+
+源码运行时，默认配置固定在后端目录 `BilibiliCookieMgmt/data/config.json`，不会随启动命令所在目录变化。
 
 ## 访问
 
