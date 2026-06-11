@@ -922,6 +922,35 @@ class ConfigSchedulerTests(unittest.TestCase):
 
         self.assertEqual(config.scheduler.cookie_refresh.scan_interval_seconds, 3600)
 
+    def test_risk_check_ignores_legacy_scheduler_enable(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            cookie_dir = root / "cookies"
+            config_path = root / "config.yaml"
+            config_path.write_text(
+                textwrap.dedent(
+                    f"""
+                    HOST: 127.0.0.1
+                    PORT: 18080
+                    STORAGE:
+                      cookie_dir: "{cookie_dir.as_posix()}"
+                    SCHEDULER:
+                      RISK_CONTROL_CHECK:
+                        enable: false
+                        interval_seconds: 120
+                    BILI:
+                      risk_control_enabled: true
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+
+            config = load_config(str(config_path))
+
+        self.assertTrue(config.bili.risk_control_enabled)
+        self.assertFalse(config.scheduler.risk_control_check.enable)
+        self.assertEqual(config.scheduler.risk_control_check.interval_seconds, 120)
+
     def test_ticket_task_not_started_when_scheduler_disabled(self) -> None:
         from core.config.loader import AppConfig, BiliConfig, SchedulerConfig, SchedulerItemConfig
         config = AppConfig(
@@ -936,18 +965,50 @@ class ConfigSchedulerTests(unittest.TestCase):
         should_start = config.bili.bili_ticket_enabled and config.scheduler.bili_ticket_refresh.enable
         self.assertFalse(should_start)
 
-    def test_risk_task_not_started_when_scheduler_disabled(self) -> None:
+    def test_risk_task_not_started_when_bili_switch_disabled(self) -> None:
+        from core.config.loader import AppConfig, BiliConfig
+        from core.scheduler import AppScheduler
+
+        class RiskServiceStub:
+            async def check_risk_control_for_all(self):
+                return {"ok": True, "total": 0, "checked": 0, "failed": 0, "details": []}
+
+        config = AppConfig(
+            bili=BiliConfig(bili_ticket_enabled=False, risk_control_enabled=False),
+        )
+        scheduler = AppScheduler(service=RiskServiceStub(), config=config)
+
+        async def run() -> None:
+            app = type("AppStub", (), {"state": type("StateStub", (), {})()})()
+            await scheduler.start(app)
+            self.assertEqual(len(scheduler._tasks), 0)
+            await scheduler.stop()
+
+        asyncio.run(run())
+
+    def test_risk_task_starts_from_bili_switch_only(self) -> None:
         from core.config.loader import AppConfig, BiliConfig, SchedulerConfig, SchedulerItemConfig
+        from core.scheduler import AppScheduler
+
+        class RiskServiceStub:
+            async def check_risk_control_for_all(self):
+                return {"ok": True, "total": 0, "checked": 0, "failed": 0, "details": []}
+
         config = AppConfig(
             bili=BiliConfig(bili_ticket_enabled=False, risk_control_enabled=True),
             scheduler=SchedulerConfig(
                 risk_control_check=SchedulerItemConfig(enable=False, interval_seconds=60),
             ),
         )
-        self.assertTrue(config.bili.risk_control_enabled)
-        self.assertFalse(config.scheduler.risk_control_check.enable)
-        should_start = config.bili.risk_control_enabled and config.scheduler.risk_control_check.enable
-        self.assertFalse(should_start)
+        scheduler = AppScheduler(service=RiskServiceStub(), config=config)
+
+        async def run() -> None:
+            app = type("AppStub", (), {"state": type("StateStub", (), {})()})()
+            await scheduler.start(app)
+            self.assertEqual(len(scheduler._tasks), 1)
+            await scheduler.stop()
+
+        asyncio.run(run())
 
 
 class MigrationScriptTests(unittest.TestCase):

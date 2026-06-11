@@ -31,7 +31,6 @@ SCHEDULER:
     enable: true                   # 是否启动 ticket 后台刷新任务
     interval_seconds: 43200        # ticket 扫描间隔(s, 默认12小时)
   RISK_CONTROL_CHECK:
-    enable: true                   # 是否启动风控后台检测任务
     interval_seconds: 3600         # 风控检测间隔(s, 默认1小时)
 
 # Bilibili 客户端配置
