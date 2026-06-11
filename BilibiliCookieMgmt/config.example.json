@@ -26,7 +26,6 @@
       "scan_interval_seconds": 21600
     },
     "BILI_TICKET_REFRESH": {
-      "enable": true,
       "interval_seconds": 43200
     },
     "RISK_CONTROL_CHECK": {

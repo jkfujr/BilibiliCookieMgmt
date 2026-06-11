@@ -38,7 +38,7 @@ class AppScheduler:
             logger.info("启动 Cookie 刷新任务")
             t = asyncio.create_task(self._loop_cookie_refresh())
             self._tasks.append(t)
-        if self.config.bili.bili_ticket_enabled and self.config.scheduler.bili_ticket_refresh.enable:
+        if self.config.bili.bili_ticket_enabled:
             logger.info("启动 bili_ticket 刷新任务")
             t = asyncio.create_task(self._loop_bili_ticket_refresh())
             self._tasks.append(t)

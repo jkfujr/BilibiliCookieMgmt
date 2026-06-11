@@ -22,9 +22,9 @@
 从 [发行版](https://github.com/jkfujr/BilibiliCookieMgmt/releases) 下载对应系统的最新构建。
 
 1. 解压下载的压缩包。
-2. 将 `config.example.json` 复制到 `data/config.json` 并修改配置。
+2. 运行可执行文件，首次启动会自动生成 `data/config.json` 并在控制台输出初始 API Token。
+   - `config.example.json` 仅作为配置参考。
    - 若仍存在旧版根目录 `config.yaml`，首次启动会自动迁移到 `data/config.json`。
-3. 运行可执行文件。
    - Windows: 双击 `BilibiliCookieMgmt-CLI-win-x64.exe`
    - Linux/macOS:
      ```bash
@@ -44,9 +44,7 @@
 docker pull ghcr.io/jkfujr/bilibilicookiemgmt:latest
 ```
 
-2. 确保挂载目录中存在 `data/config.json` 配置文件。
-
-3. 启动服务：
+2. 启动服务。首次启动会在挂载的 `data` 目录内生成 `config.json`，并在容器日志中输出初始 API Token。
 
 ```bash
 docker run -d --name bilibili-cookie-mgmt \

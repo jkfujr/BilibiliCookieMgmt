@@ -104,7 +104,6 @@ class SettingsService:
         target["COOKIE_REFRESH"]["scan_interval_seconds"] = self._positive_int(cookie_refresh, "scan_interval_seconds", current.cookie_refresh.scan_interval_seconds)
 
         ticket_refresh = self._dict(payload, "BILI_TICKET_REFRESH")
-        target["BILI_TICKET_REFRESH"]["enable"] = self._bool(ticket_refresh, "enable", current.bili_ticket_refresh.enable)
         target["BILI_TICKET_REFRESH"]["interval_seconds"] = self._positive_int(ticket_refresh, "interval_seconds", current.bili_ticket_refresh.interval_seconds)
 
         risk_check = self._dict(payload, "RISK_CONTROL_CHECK")

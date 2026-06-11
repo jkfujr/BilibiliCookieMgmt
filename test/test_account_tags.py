@@ -109,7 +109,6 @@ def write_config(config_path: Path, cookie_dir: Path) -> None:
                 "scan_interval_seconds": 21600,
             },
             "BILI_TICKET_REFRESH": {
-                "enable": True,
                 "interval_seconds": 43200,
             },
             "RISK_CONTROL_CHECK": {
@@ -630,6 +629,7 @@ class ApiTagTests(unittest.TestCase):
         self.assertEqual(body["API_TOKEN"]["token"], {"configured": True, "masked": "****"})
         self.assertEqual(body["GOTIFY"]["token"], {"configured": False, "masked": ""})
         self.assertEqual(body["SCHEDULER"]["COOKIE_REFRESH"]["scan_interval_seconds"], 21600)
+        self.assertNotIn("enable", body["SCHEDULER"]["BILI_TICKET_REFRESH"])
 
     def test_update_settings_preserves_overwrites_and_clears_tokens(self) -> None:
         settings = self.client.get("/api/v1/settings/", headers=self.auth_headers).json()
@@ -653,6 +653,21 @@ class ApiTagTests(unittest.TestCase):
         saved = json.loads(self.config_path.read_text(encoding="utf-8"))
         self.assertEqual(saved["API_TOKEN"]["token"], "new-token")
         self.assertEqual(saved["GOTIFY"]["token"], "")
+
+    def test_update_settings_does_not_save_legacy_ticket_refresh_enable(self) -> None:
+        settings = self.client.get("/api/v1/settings/", headers=self.auth_headers).json()
+        settings["API_TOKEN"]["token"] = {}
+        settings["GOTIFY"]["token"] = {}
+        settings["SCHEDULER"]["BILI_TICKET_REFRESH"]["enable"] = False
+        settings["BILI"]["bili_ticket_enabled"] = True
+
+        response = self.client.put("/api/v1/settings/", headers=self.auth_headers, json=settings)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("enable", response.json()["settings"]["SCHEDULER"]["BILI_TICKET_REFRESH"])
+        saved = json.loads(self.config_path.read_text(encoding="utf-8"))
+        self.assertNotIn("enable", saved["SCHEDULER"]["BILI_TICKET_REFRESH"])
+        self.assertTrue(self.app.state.config.bili.bili_ticket_enabled)
 
     def test_update_settings_reports_restart_required_for_base_config(self) -> None:
         settings = self.client.get("/api/v1/settings/", headers=self.auth_headers).json()
@@ -1013,7 +1028,7 @@ class ConfigSchedulerTests(unittest.TestCase):
             config = load_config(str(config_path))
 
         self.assertTrue(config.bili.risk_control_enabled)
-        self.assertFalse(config.scheduler.risk_control_check.enable)
+        self.assertFalse(hasattr(config.scheduler.risk_control_check, "enable"))
         self.assertEqual(config.scheduler.risk_control_check.interval_seconds, 120)
 
     def test_default_config_migrates_legacy_yaml_once(self) -> None:
@@ -1048,19 +1063,88 @@ class ConfigSchedulerTests(unittest.TestCase):
             saved = json.loads(migrated_config.read_text(encoding="utf-8"))
             self.assertEqual(saved["API_TOKEN"]["token"], "migrated-token")
 
-    def test_ticket_task_not_started_when_scheduler_disabled(self) -> None:
-        from core.config.loader import AppConfig, BiliConfig, SchedulerConfig, SchedulerItemConfig
+    def test_default_config_generates_when_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            old_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                with self.assertLogs("core.config.loader", level="WARNING") as logs:
+                    config = load_config()
+                with self.assertNoLogs("core.config.loader", level="WARNING"):
+                    reloaded = load_config()
+            finally:
+                os.chdir(old_cwd)
+
+            generated_config = root / "data" / "config.json"
+            self.assertTrue(generated_config.exists())
+            self.assertTrue(config.api_token.enable)
+            self.assertTrue(config.api_token.token)
+            self.assertEqual(reloaded.api_token.token, config.api_token.token)
+
+            saved = json.loads(generated_config.read_text(encoding="utf-8"))
+            self.assertTrue(saved["API_TOKEN"]["enable"])
+            self.assertEqual(saved["API_TOKEN"]["token"], config.api_token.token)
+            self.assertIn("已生成默认配置: data/config.json", "\n".join(logs.output))
+            self.assertIn(f"初始 API Token: {config.api_token.token}", "\n".join(logs.output))
+
+    def test_explicit_missing_config_still_raises(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            missing_config = Path(temp_dir) / "missing.json"
+            with self.assertRaises(FileNotFoundError):
+                load_config(str(missing_config))
+
+    def test_ticket_task_not_started_when_bili_switch_disabled(self) -> None:
+        from core.config.loader import AppConfig, BiliConfig
+        from core.scheduler import AppScheduler
+
+        class TicketServiceStub:
+            async def refresh_expiring_tickets(self):
+                return {"ok": True, "total": 0, "refreshed": 0, "skipped": 0, "failed": 0, "details": []}
+
         config = AppConfig(
-            bili=BiliConfig(bili_ticket_enabled=True, risk_control_enabled=False),
-            scheduler=SchedulerConfig(
-                bili_ticket_refresh=SchedulerItemConfig(enable=False, interval_seconds=60),
-            ),
+            bili=BiliConfig(bili_ticket_enabled=False, risk_control_enabled=False),
         )
-        self.assertTrue(config.bili.bili_ticket_enabled)
-        self.assertFalse(config.scheduler.bili_ticket_refresh.enable)
-        # 双开关同时为 True 才启动
-        should_start = config.bili.bili_ticket_enabled and config.scheduler.bili_ticket_refresh.enable
-        self.assertFalse(should_start)
+        scheduler = AppScheduler(service=TicketServiceStub(), config=config)
+
+        async def run() -> None:
+            app = type("AppStub", (), {"state": type("StateStub", (), {})()})()
+            await scheduler.start(app)
+            self.assertEqual(len(scheduler._tasks), 0)
+            await scheduler.stop()
+
+        asyncio.run(run())
+
+    def test_ticket_task_starts_from_bili_switch_only(self) -> None:
+        from core.config.loader import build_config
+        from core.scheduler import AppScheduler
+
+        class TicketServiceStub:
+            async def refresh_expiring_tickets(self):
+                return {"ok": True, "total": 0, "refreshed": 0, "skipped": 0, "failed": 0, "details": []}
+
+        config = build_config({
+            "SCHEDULER": {
+                "BILI_TICKET_REFRESH": {
+                    "enable": False,
+                    "interval_seconds": 60,
+                },
+            },
+            "BILI": {
+                "bili_ticket_enabled": True,
+            },
+        })
+        scheduler = AppScheduler(service=TicketServiceStub(), config=config)
+
+        async def run() -> None:
+            app = type("AppStub", (), {"state": type("StateStub", (), {})()})()
+            await scheduler.start(app)
+            self.assertEqual(len(scheduler._tasks), 1)
+            await scheduler.stop()
+
+        self.assertFalse(hasattr(config.scheduler.bili_ticket_refresh, "enable"))
+        self.assertEqual(config.scheduler.bili_ticket_refresh.interval_seconds, 60)
+        asyncio.run(run())
 
     def test_risk_task_not_started_when_bili_switch_disabled(self) -> None:
         from core.config.loader import AppConfig, BiliConfig
@@ -1084,7 +1168,7 @@ class ConfigSchedulerTests(unittest.TestCase):
         asyncio.run(run())
 
     def test_risk_task_starts_from_bili_switch_only(self) -> None:
-        from core.config.loader import AppConfig, BiliConfig, SchedulerConfig, SchedulerItemConfig
+        from core.config.loader import AppConfig, BiliConfig, SchedulerConfig, SchedulerIntervalConfig
         from core.scheduler import AppScheduler
 
         class RiskServiceStub:
@@ -1094,7 +1178,7 @@ class ConfigSchedulerTests(unittest.TestCase):
         config = AppConfig(
             bili=BiliConfig(bili_ticket_enabled=False, risk_control_enabled=True),
             scheduler=SchedulerConfig(
-                risk_control_check=SchedulerItemConfig(enable=False, interval_seconds=60),
+                risk_control_check=SchedulerIntervalConfig(interval_seconds=60),
             ),
         )
         scheduler = AppScheduler(service=RiskServiceStub(), config=config)

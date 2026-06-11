@@ -6,10 +6,13 @@ from pathlib import Path
 import os
 import argparse
 import json
+import logging
+import secrets
 import yaml
 
 DEFAULT_CONFIG_PATH = "data/config.json"
 LEGACY_CONFIG_PATH = "config.yaml"
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -40,11 +43,16 @@ class SchedulerItemConfig:
 
 
 @dataclass
+class SchedulerIntervalConfig:
+    interval_seconds: int = 43200
+
+
+@dataclass
 class SchedulerConfig:
     cookie_check: SchedulerItemConfig = field(default_factory=SchedulerItemConfig)
     cookie_refresh: SchedulerItemConfig = field(default_factory=lambda: SchedulerItemConfig(enable=False, interval_seconds=86400))
-    bili_ticket_refresh: SchedulerItemConfig = field(default_factory=lambda: SchedulerItemConfig(enable=False, interval_seconds=1800))
-    risk_control_check: SchedulerItemConfig = field(default_factory=lambda: SchedulerItemConfig(enable=False, interval_seconds=3600))
+    bili_ticket_refresh: SchedulerIntervalConfig = field(default_factory=lambda: SchedulerIntervalConfig(interval_seconds=43200))
+    risk_control_check: SchedulerIntervalConfig = field(default_factory=lambda: SchedulerIntervalConfig(interval_seconds=3600))
 
 
 @dataclass
@@ -98,7 +106,6 @@ def config_to_dict(cfg: AppConfig) -> Dict[str, Any]:
                 "scan_interval_seconds": cfg.scheduler.cookie_refresh.scan_interval_seconds,
             },
             "BILI_TICKET_REFRESH": {
-                "enable": cfg.scheduler.bili_ticket_refresh.enable,
                 "interval_seconds": cfg.scheduler.bili_ticket_refresh.interval_seconds,
             },
             "RISK_CONTROL_CHECK": {
@@ -113,10 +120,14 @@ def config_to_dict(cfg: AppConfig) -> Dict[str, Any]:
 
 
 def save_config_file(cfg: AppConfig, config_path: str | Path | None = None) -> None:
-    path = Path(config_path or cfg.config_path)
+    _write_config_data(Path(config_path or cfg.config_path), config_to_dict(cfg))
+
+
+def _write_config_data(config_path: str | Path, data: Dict[str, Any]) -> None:
+    path = Path(config_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as f:
-        json.dump(config_to_dict(cfg), f, ensure_ascii=False, indent=2)
+        json.dump(data, f, ensure_ascii=False, indent=2)
         f.write("\n")
 
 
@@ -134,6 +145,52 @@ def _read_legacy_yaml_config(config_path: str | Path) -> Dict[str, Any]:
     if not isinstance(data, dict):
         raise ValueError("旧配置文件根节点必须是对象")
     return data
+
+
+def _generate_api_token() -> str:
+    return secrets.token_urlsafe(32)
+
+
+def _build_default_config_data(token: str) -> Dict[str, Any]:
+    return {
+        "HOST": "0.0.0.0",
+        "PORT": 18000,
+        "API_TOKEN": {
+            "enable": True,
+            "token": token,
+        },
+        "STORAGE": {
+            "cookie_dir": "./data/cookie",
+        },
+        "GOTIFY": {
+            "enable": False,
+            "url": "http://HOST:PORT",
+            "token": "",
+            "priority": 5,
+            "title": "BilibiliCookieMgmt",
+        },
+        "SCHEDULER": {
+            "COOKIE_CHECK": {
+                "enable": True,
+                "interval_seconds": 600,
+            },
+            "COOKIE_REFRESH": {
+                "enable": True,
+                "interval_seconds": 2592000,
+                "scan_interval_seconds": 21600,
+            },
+            "BILI_TICKET_REFRESH": {
+                "interval_seconds": 43200,
+            },
+            "RISK_CONTROL_CHECK": {
+                "interval_seconds": 3600,
+            },
+        },
+        "BILI": {
+            "bili_ticket_enabled": False,
+            "risk_control_enabled": False,
+        },
+    }
 
 
 def build_config(data: Dict[str, Any], config_path: str | Path = DEFAULT_CONFIG_PATH) -> AppConfig:
@@ -174,11 +231,10 @@ def build_config(data: Dict[str, Any], config_path: str | Path = DEFAULT_CONFIG_
                 interval_seconds=int(refresh_cfg_src.get("interval_seconds", 86400)),
                 scan_interval_seconds=int(refresh_cfg_src.get("scan_interval_seconds", 21600)),
             ),
-            bili_ticket_refresh=SchedulerItemConfig(
-                enable=bool(ticket_refresh_cfg_src.get("enable", True)),
+            bili_ticket_refresh=SchedulerIntervalConfig(
                 interval_seconds=int(ticket_refresh_cfg_src.get("interval_seconds", 43200)),
             ),
-            risk_control_check=SchedulerItemConfig(
+            risk_control_check=SchedulerIntervalConfig(
                 interval_seconds=int(risk_check_cfg_src.get("interval_seconds", 3600)),
             ),
         ),
@@ -217,10 +273,20 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
         _ensure_dirs(cfg)
         return cfg
 
+    if using_default_path and not config_file.exists():
+        token = _generate_api_token()
+        data = _build_default_config_data(token)
+        _write_config_data(config_file, data)
+        cfg = build_config(data, config_file)
+        _ensure_dirs(cfg)
+        logger.warning(f"已生成默认配置: {cfg.config_path}")
+        logger.warning(f"初始 API Token: {token}")
+        return cfg
+
     if not config_file.exists():
         msg = f"未找到配置文件: {config_path}"
         if os.path.exists("config.example.json"):
-            msg += "。检测到 config.example.json，请将其复制为 data/config.json 并根据需要修改配置。"
+            msg += "。检测到 config.example.json，可参考该文件创建配置。"
         raise FileNotFoundError(msg)
 
     cfg = build_config(_read_json_config(config_file), config_file)

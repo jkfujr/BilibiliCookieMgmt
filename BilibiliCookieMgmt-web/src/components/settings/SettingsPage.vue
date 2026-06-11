@@ -362,13 +362,6 @@ onMounted(loadSettings)
                 ></v-text-field>
               </v-col>
               <v-col cols="12" md="6">
-                <v-switch
-                  v-model="settings.SCHEDULER.BILI_TICKET_REFRESH.enable"
-                  color="primary"
-                  label="ticket 刷新"
-                  hide-details
-                  inset
-                ></v-switch>
                 <v-text-field
                   v-model.number="settings.SCHEDULER.BILI_TICKET_REFRESH.interval_seconds"
                   label="ticket 扫描间隔"
