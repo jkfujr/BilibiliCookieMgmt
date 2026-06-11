@@ -51,11 +51,8 @@ const headers = [
   { title: '用户信息', key: 'user_info', align: 'start', sortable: false },
   { title: '标签', key: 'tags', align: 'start', sortable: false },
   { title: '是否启用', key: 'is_enabled', align: 'center' },
-  { title: '加入时间', key: 'managed.join_time', align: 'center' },
-  { title: '更新时间', key: 'managed.update_time', align: 'center' },
-  { title: '过期时间', key: 'expire_time', align: 'center' },
+  { title: 'SESSDATA 过期', key: 'expire_time', align: 'center' },
   { title: '登录状态', key: 'managed.status', align: 'center' },
-  { title: '检查时间', key: 'managed.last_check_time', align: 'center' },
   { title: '操作', key: 'actions', align: 'center', sortable: false },
 ]
 
@@ -159,14 +156,6 @@ const getStatusDisplay = (status) => {
       ></v-switch>
     </template>
 
-    <template #item.managed.join_time="{ item }">
-      <div class="text-caption">{{ formatTime(item.managed?.join_time) }}</div>
-    </template>
-
-    <template #item.managed.update_time="{ item }">
-      <div class="text-caption">{{ formatTime(item.managed?.update_time) }}</div>
-    </template>
-
     <template #item.expire_time="{ item }">
       <div class="text-caption">{{ formatTime(getExpireTime(item)) }}</div>
     </template>
@@ -181,10 +170,6 @@ const getStatusDisplay = (status) => {
       >
         {{ getStatusDisplay(item.managed?.status).label }}
       </v-chip>
-    </template>
-
-    <template #item.managed.last_check_time="{ item }">
-      <div class="text-caption text-grey">{{ formatTime(item.managed?.last_check_time) || '-' }}</div>
     </template>
 
     <template #item.actions="{ item }">

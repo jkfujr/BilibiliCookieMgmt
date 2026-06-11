@@ -4,7 +4,7 @@ import { ref } from 'vue'
 import { createApiClient } from './api/client'
 import AccountTable from './components/accounts/AccountTable.vue'
 import StatsCards from './components/dashboard/StatsCards.vue'
-import CookieDetailDialog from './components/dialogs/CookieDetailDialog.vue'
+import CookieDetailDrawer from './components/dialogs/CookieDetailDrawer.vue'
 import DeleteConfirmDialog from './components/dialogs/DeleteConfirmDialog.vue'
 import LoginDialog from './components/dialogs/LoginDialog.vue'
 import QrLoginDialog from './components/dialogs/QrLoginDialog.vue'
@@ -274,10 +274,11 @@ const handleSettingsSaved = ({ result, apiToken }) => {
       @close="closeQrDialog"
     />
 
-    <CookieDetailDialog
+    <CookieDetailDrawer
       :model-value="cookieDialog"
       :cookie="currentCookie"
       :current-tab="currentCookieTab"
+      :screenshot-mode="screenshotMode"
       @update:model-value="updateCookieDialog"
       @update:current-tab="currentCookieTab = $event"
       @copy="copyContent"

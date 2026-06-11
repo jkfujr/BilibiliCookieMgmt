@@ -29,7 +29,7 @@ export const useCookieDashboard = ({ apiClient, token, showMsg } = {}) => {
   const tagMatchMode = ref('any')
 
   const cookieDialog = ref(false)
-  const currentCookie = ref({ simple: '', complete: '' })
+  const currentCookie = ref({ account: null, simple: '', complete: '' })
   const currentCookieTab = ref('simple')
 
   const tagDialog = ref(false)
@@ -55,7 +55,7 @@ export const useCookieDashboard = ({ apiClient, token, showMsg } = {}) => {
     selectedTags.value = []
     tagMatchMode.value = 'any'
     cookieDialog.value = false
-    currentCookie.value = { simple: '', complete: '' }
+    currentCookie.value = { account: null, simple: '', complete: '' }
     currentCookieTab.value = 'simple'
     tagDialog.value = false
     tagTarget.value = null
@@ -201,6 +201,7 @@ export const useCookieDashboard = ({ apiClient, token, showMsg } = {}) => {
       errorMessage: '获取 Cookie 详情失败',
       onSuccess: (result) => {
         currentCookie.value = {
+          account: result,
           simple: result?.managed?.header_string || '',
           complete: JSON.stringify(result, null, 4),
         }
