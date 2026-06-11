@@ -25,7 +25,8 @@ SCHEDULER:
     interval_seconds: 600          # 健康检查间隔(s)
   COOKIE_REFRESH:
     enable: true
-    interval_seconds: 2592000      # 刷新间隔(s, 默认30天)
+    interval_seconds: 2592000      # 剩余有效期低于该值时刷新(s, 默认30天)
+    scan_interval_seconds: 21600   # 自动刷新扫描间隔(s, 默认6小时)
   BILI_TICKET_REFRESH:
     enable: true                   # 是否启动 ticket 后台刷新任务
     interval_seconds: 43200        # ticket 扫描间隔(s, 默认12小时)

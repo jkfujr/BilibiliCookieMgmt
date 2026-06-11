@@ -7,6 +7,7 @@ import logging
 import sys
 import tempfile
 import textwrap
+import time
 import unittest
 from pathlib import Path
 
@@ -22,7 +23,7 @@ if str(BACKEND_DIR) not in sys.path:
 from core.infrastructure.repositories.cookie_repository import CookieRepository
 from core.infrastructure.bilibili_client import BilibiliClient
 from core.services.cookie_service import CookieService
-from core.config.loader import AppConfig
+from core.config.loader import AppConfig, load_config
 
 
 def build_cookie(name: str, value: str) -> dict:
@@ -53,6 +54,14 @@ def build_raw(uid: str, prefix: str = "base") -> dict:
             ]
         },
     }
+
+
+def set_cookie_expires(raw: dict, name: str, expires: int | str | None) -> dict:
+    for cookie in raw["cookie_info"]["cookies"]:
+        if cookie["name"] == name:
+            cookie["expires"] = expires
+            break
+    return raw
 
 
 def build_legacy_raw(uid: str) -> dict:
@@ -91,6 +100,7 @@ def write_config(config_path: Path, cookie_dir: Path) -> None:
               COOKIE_REFRESH:
                 enable: false
                 interval_seconds: 86400
+                scan_interval_seconds: 21600
             """
         ).strip(),
         encoding="utf-8",
@@ -678,6 +688,80 @@ class TicketAndRiskServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(stored["managed"]["status"], "invalid")
         self.assertEqual(result["managed"]["last_check_time"], stored["managed"]["last_check_time"])
 
+    async def test_refresh_expiring_cookies_skips_when_sessdata_not_expiring(self) -> None:
+        doc = await self.repo.get("9001")
+        raw = set_cookie_expires(doc["raw"], "SESSDATA", int(time.time()) + 90 * 86400)
+        doc["raw"] = raw
+        doc["managed"]["last_refresh_time"] = None
+        (self.cookie_dir / "9001.json").write_text(json.dumps(doc, ensure_ascii=False), encoding="utf-8")
+
+        summary = await self.service.refresh_expiring_cookies(30 * 86400)
+        stored = await self.repo.get("9001")
+
+        self.assertEqual(summary["total"], 1)
+        self.assertEqual(summary["refreshed"], 0)
+        self.assertEqual(summary["skipped"], 1)
+        self.assertEqual(stored["managed"]["last_refresh_time"], None)
+        self.assertEqual(stored["managed"]["refresh_status"], "not_needed")
+
+    async def test_refresh_expiring_cookies_refreshes_when_sessdata_expiring(self) -> None:
+        doc = await self.repo.get("9001")
+        raw = set_cookie_expires(doc["raw"], "SESSDATA", int(time.time()) + 3600)
+        doc["raw"] = raw
+        (self.cookie_dir / "9001.json").write_text(json.dumps(doc, ensure_ascii=False), encoding="utf-8")
+
+        summary = await self.service.refresh_expiring_cookies(30 * 86400)
+        stored = await self.repo.get("9001")
+
+        self.assertEqual(summary["total"], 1)
+        self.assertEqual(summary["refreshed"], 1)
+        self.assertEqual(summary["skipped"], 0)
+        self.assertEqual(stored["managed"]["refresh_status"], "success")
+        self.assertIn("refreshed-sess-9001", stored["managed"]["header_string"])
+
+    async def test_refresh_expiring_cookies_skips_invalid_sessdata_expires(self) -> None:
+        doc = await self.repo.get("9001")
+        raw = set_cookie_expires(doc["raw"], "SESSDATA", "bad-expires")
+        doc["raw"] = raw
+        (self.cookie_dir / "9001.json").write_text(json.dumps(doc, ensure_ascii=False), encoding="utf-8")
+
+        summary = await self.service.refresh_expiring_cookies(30 * 86400)
+        stored = await self.repo.get("9001")
+
+        self.assertEqual(summary["total"], 1)
+        self.assertEqual(summary["refreshed"], 0)
+        self.assertEqual(summary["skipped"], 1)
+        self.assertIn("SESSDATA.expires", summary["details"][0]["message"])
+        self.assertEqual(stored["managed"]["refresh_status"], "not_needed")
+
+    async def test_refresh_expiring_cookies_skips_missing_sessdata_expires(self) -> None:
+        doc = await self.repo.get("9001")
+        raw = doc["raw"]
+        raw["cookie_info"]["cookies"] = [
+            cookie for cookie in raw["cookie_info"]["cookies"]
+            if cookie["name"] != "SESSDATA"
+        ]
+        doc["raw"] = raw
+        (self.cookie_dir / "9001.json").write_text(json.dumps(doc, ensure_ascii=False), encoding="utf-8")
+
+        summary = await self.service.refresh_expiring_cookies(30 * 86400)
+        stored = await self.repo.get("9001")
+
+        self.assertEqual(summary["total"], 1)
+        self.assertEqual(summary["refreshed"], 0)
+        self.assertEqual(summary["skipped"], 1)
+        self.assertIn("SESSDATA.expires", summary["details"][0]["message"])
+        self.assertEqual(stored["managed"]["refresh_status"], "not_needed")
+
+    async def test_get_sessdata_expires_rejects_bool(self) -> None:
+        raw = build_raw("9002")
+        for cookie in raw["cookie_info"]["cookies"]:
+            if cookie["name"] == "SESSDATA":
+                cookie["expires"] = True
+                break
+
+        self.assertIsNone(CookieService._get_sessdata_expires(raw))
+
     async def test_check_cookie_rebuilds_legacy_bnut_header_when_disabled(self) -> None:
         doc = await self.repo.get("9001")
         doc["managed"]["header_string"] = f"{doc['managed']['header_string']}; b_nut=legacy-nut"
@@ -784,6 +868,59 @@ class BilibiliClientContractTests(unittest.IsolatedAsyncioTestCase):
 
 class ConfigSchedulerTests(unittest.TestCase):
     """配置与调度双开关联动测试。"""
+
+    def test_cookie_refresh_scan_interval_defaults_to_six_hours(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            cookie_dir = root / "cookies"
+            config_path = root / "config.yaml"
+            config_path.write_text(
+                textwrap.dedent(
+                    f"""
+                    HOST: 127.0.0.1
+                    PORT: 18080
+                    STORAGE:
+                      cookie_dir: "{cookie_dir.as_posix()}"
+                    SCHEDULER:
+                      COOKIE_REFRESH:
+                        enable: true
+                        interval_seconds: 2592000
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+
+            config = load_config(str(config_path))
+
+        self.assertTrue(config.scheduler.cookie_refresh.enable)
+        self.assertEqual(config.scheduler.cookie_refresh.interval_seconds, 2592000)
+        self.assertEqual(config.scheduler.cookie_refresh.scan_interval_seconds, 21600)
+
+    def test_cookie_refresh_scan_interval_loads_explicit_value(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            cookie_dir = root / "cookies"
+            config_path = root / "config.yaml"
+            config_path.write_text(
+                textwrap.dedent(
+                    f"""
+                    HOST: 127.0.0.1
+                    PORT: 18080
+                    STORAGE:
+                      cookie_dir: "{cookie_dir.as_posix()}"
+                    SCHEDULER:
+                      COOKIE_REFRESH:
+                        enable: true
+                        interval_seconds: 2592000
+                        scan_interval_seconds: 3600
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+
+            config = load_config(str(config_path))
+
+        self.assertEqual(config.scheduler.cookie_refresh.scan_interval_seconds, 3600)
 
     def test_ticket_task_not_started_when_scheduler_disabled(self) -> None:
         from core.config.loader import AppConfig, BiliConfig, SchedulerConfig, SchedulerItemConfig

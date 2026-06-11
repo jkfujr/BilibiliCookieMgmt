@@ -90,33 +90,15 @@ class AppScheduler:
             await asyncio.sleep(interval)
 
     async def _loop_cookie_refresh(self) -> None:
-        interval = max(60, int(self.config.scheduler.cookie_refresh.interval_seconds))
-        logger.info(f"Cookie 刷新循环已启动, 间隔: {interval}秒")
+        threshold = max(60, int(self.config.scheduler.cookie_refresh.interval_seconds))
+        scan_interval = max(60, int(self.config.scheduler.cookie_refresh.scan_interval_seconds))
+        logger.info(f"Cookie 刷新循环已启动, 扫描间隔: {scan_interval}秒, 临期阈值: {threshold}秒")
         while not self._stopping.is_set():
             try:
-                # 基于上次刷新时间与配置间隔执行刷新
-                items = await self.service.list_cookies()
-                from datetime import datetime, timedelta
-                threshold = timedelta(seconds=interval)
-                for doc in items:
-                    info = doc.get(MANAGED_KEY, {}) if isinstance(doc.get(MANAGED_KEY), dict) else {}
-                    dede_user_id = info.get("DedeUserID")
-                    last_refresh_iso = info.get("last_refresh_time")
-                    try:
-                        last_refresh = datetime.fromisoformat(last_refresh_iso) if last_refresh_iso else None
-                    except Exception:
-                        last_refresh = None
-                    need_refresh = False
-                    if last_refresh is None:
-                        need_refresh = True
-                    else:
-                        need_refresh = (datetime.now() - last_refresh) >= threshold
-                    if dede_user_id and need_refresh:
-                        logger.info(f"触发自动刷新: {dede_user_id}")
-                        await self.service.refresh_cookie(dede_user_id)
+                await self.service.refresh_expiring_cookies(threshold)
             except Exception as e:
                 logger.error(f"Cookie 刷新循环异常: {e}", exc_info=True)
-            await asyncio.sleep(interval)
+            await asyncio.sleep(scan_interval)
 
     async def _loop_risk_control_check(self) -> None:
         interval = max(60, int(self.config.scheduler.risk_control_check.interval_seconds))

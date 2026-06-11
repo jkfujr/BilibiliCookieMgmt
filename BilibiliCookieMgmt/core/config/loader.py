@@ -32,6 +32,7 @@ class GotifyConfig:
 class SchedulerItemConfig:
     enable: bool = False
     interval_seconds: int = 43200
+    scan_interval_seconds: int = 21600
 
 
 @dataclass
@@ -122,6 +123,7 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
             cookie_refresh=SchedulerItemConfig(
                 enable=bool(refresh_cfg_src.get("enable", False)),
                 interval_seconds=int(refresh_cfg_src.get("interval_seconds", 86400)),
+                scan_interval_seconds=int(refresh_cfg_src.get("scan_interval_seconds", 21600)),
             ),
             bili_ticket_refresh=SchedulerItemConfig(
                 enable=bool(ticket_refresh_cfg_src.get("enable", True)),

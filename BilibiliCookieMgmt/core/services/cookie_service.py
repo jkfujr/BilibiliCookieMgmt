@@ -361,6 +361,59 @@ class CookieService:
 
         return {"ok": True, "total": len(target_ids), "succeeded": succeeded, "failed": failed, "details": details}
 
+    async def refresh_expiring_cookies(self, threshold_seconds: int) -> Dict[str, Any]:
+        """
+        自动刷新即将过期的 Cookie。
+        仅以 SESSDATA.expires 判断是否临期, 不使用 last_refresh_time。
+        """
+        items = await self.repo.list()
+        total = 0
+        refreshed = 0
+        skipped = 0
+        failed = 0
+        details: List[Dict[str, Any]] = []
+
+        for doc in items:
+            info = doc.get(MANAGED_KEY, {}) if isinstance(doc.get(MANAGED_KEY), dict) else {}
+            dede_user_id = info.get("DedeUserID")
+            if not dede_user_id:
+                continue
+
+            total += 1
+            raw = doc.get(RAW_KEY, {}) if isinstance(doc.get(RAW_KEY), dict) else {}
+            expires = self._get_sessdata_expires(raw)
+            if expires is None:
+                skipped += 1
+                message = "缺少或非法 SESSDATA.expires"
+                details.append({"DedeUserID": dede_user_id, "ok": True, "skipped": True, "message": message})
+                logger.warning(f"跳过自动刷新: {dede_user_id}, 原因: {message}")
+                continue
+
+            if not self._cookie_needs_refresh(expires, threshold_seconds):
+                skipped += 1
+                continue
+
+            try:
+                result = await self.refresh_cookie(str(dede_user_id))
+                result_info = result.get(MANAGED_KEY, {}) if result and isinstance(result.get(MANAGED_KEY), dict) else {}
+                if result_info.get("refresh_status") == "success":
+                    refreshed += 1
+                    details.append({"DedeUserID": dede_user_id, "ok": True})
+                    logger.info(f"Cookie 自动刷新成功: {dede_user_id}")
+                else:
+                    failed += 1
+                    message = f"刷新状态: {result_info.get('refresh_status')}"
+                    details.append({"DedeUserID": dede_user_id, "ok": False, "message": message})
+            except Exception as e:
+                failed += 1
+                details.append({"DedeUserID": dede_user_id, "ok": False, "message": f"异常: {e}"})
+                logger.error(f"Cookie 自动刷新失败: {dede_user_id}, 错误: {e}", exc_info=True)
+
+        if total > 0:
+            logger.info(f"Cookie 自动刷新扫描完成: 总计 {total}, 已刷新 {refreshed}, 跳过 {skipped}, 失败 {failed}")
+
+        return {"ok": True, "total": total, "refreshed": refreshed, "skipped": skipped, "failed": failed, "details": details}
+
     async def test_cookie(self, header_string: str) -> Dict[str, Any]:
         """
         测试任意 Cookie 字符串是否有效。
@@ -431,6 +484,36 @@ class CookieService:
         except Exception as e:
             logger.warning(f"刷新 bili_ticket 异常: {dede_user_id}, 错误: {e}")
         return None
+
+    @staticmethod
+    def _get_sessdata_expires(raw: Dict[str, Any]) -> Optional[int]:
+        cookie_info = raw.get("cookie_info")
+        if not isinstance(cookie_info, dict):
+            return None
+
+        cookies = cookie_info.get("cookies")
+        if not isinstance(cookies, list):
+            return None
+
+        for cookie in cookies:
+            if not isinstance(cookie, dict) or cookie.get("name") != "SESSDATA":
+                continue
+
+            expires_value = cookie.get("expires")
+            if isinstance(expires_value, bool):
+                return None
+            if isinstance(expires_value, int):
+                expires = expires_value
+            elif isinstance(expires_value, str) and expires_value.isdigit():
+                expires = int(expires_value)
+            else:
+                return None
+            return expires if expires > 0 else None
+        return None
+
+    @staticmethod
+    def _cookie_needs_refresh(expires: int, threshold_seconds: int) -> bool:
+        return expires - datetime.now().timestamp() < int(threshold_seconds)
 
     @staticmethod
     def _strip_sensitive_cookie_parts(header_string: str) -> str:
