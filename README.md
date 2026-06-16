@@ -23,7 +23,6 @@
 
 1. 解压下载的压缩包。
 2. 运行可执行文件，首次启动会在程序目录下自动生成 `data/config.json` 并在控制台输出初始 API Token。
-   - `config.example.json` 仅作为配置参考。
    - 若仍存在旧版根目录 `config.yaml`，首次启动会自动迁移到 `data/config.json`。
    - Windows: 双击 `BilibiliCookieMgmt-CLI-win-x64.exe`
    - Linux/macOS:
