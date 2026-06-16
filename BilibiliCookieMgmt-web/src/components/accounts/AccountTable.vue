@@ -3,6 +3,7 @@ import { computed } from 'vue'
 
 import TagFilterBar from '../dashboard/TagFilterBar.vue'
 import { getAccountTags } from '../../utils/accountTagUtils'
+import { getAccountStatusDisplays } from '../../utils/accountStatusUtils'
 import { formatTime, getAccountId, getExpireTime } from '../../utils/accountUtils'
 
 const props = defineProps({
@@ -58,7 +59,7 @@ const headers = [
   { title: '用户信息', key: 'user_info', align: 'start', sortable: false },
   { title: '标签', key: 'tags', align: 'start', sortable: false },
   { title: 'SESSDATA 过期', key: 'expire_time', align: 'center' },
-  { title: '登录状态', key: 'managed.status', align: 'center' },
+  { title: '账号状态', key: 'managed.status', align: 'center' },
   { title: '操作', key: 'actions', align: 'end', sortable: false },
 ]
 
@@ -68,33 +69,6 @@ const selectedValues = computed(() => {
 
 const isSameAccountId = (left, right) => {
   return String(left || '') === String(right || '')
-}
-
-const statusMap = {
-  valid: {
-    color: 'success',
-    icon: 'mdi-check',
-    label: '有效',
-  },
-  expired: {
-    color: 'warning',
-    icon: 'mdi-clock-outline',
-    label: '过期',
-  },
-  invalid: {
-    color: 'error',
-    icon: 'mdi-close-circle-outline',
-    label: '无效',
-  },
-  unknown: {
-    color: 'grey',
-    icon: '',
-    label: '未知',
-  },
-}
-
-const getStatusDisplay = (status) => {
-  return statusMap[status] || statusMap.unknown
 }
 
 const getEnabledText = (account) => {
@@ -219,15 +193,19 @@ const emitRowAction = (eventName, account) => {
     </template>
 
     <template #item.managed.status="{ item }">
-      <v-chip
-        :color="getStatusDisplay(item.managed?.status).color"
-        size="x-small"
-        :prepend-icon="getStatusDisplay(item.managed?.status).icon || undefined"
-        variant="flat"
-        class="font-weight-bold"
-      >
-        {{ getStatusDisplay(item.managed?.status).label }}
-      </v-chip>
+      <div class="d-flex justify-center flex-wrap ga-1 account-status-cell">
+        <v-chip
+          v-for="status in getAccountStatusDisplays(item)"
+          :key="status.key"
+          :color="status.color"
+          size="x-small"
+          :prepend-icon="status.icon || undefined"
+          variant="flat"
+          class="font-weight-bold"
+        >
+          {{ status.label }}
+        </v-chip>
+      </div>
     </template>
 
     <template #item.actions="{ item }">
@@ -322,5 +300,9 @@ const emitRowAction = (eventName, account) => {
 
 .action-cell {
   min-width: 220px;
+}
+
+.account-status-cell {
+  min-width: 92px;
 }
 </style>

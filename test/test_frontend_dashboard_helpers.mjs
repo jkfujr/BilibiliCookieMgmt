@@ -7,6 +7,7 @@ import {
   normalizeAccountIds,
   syncSelectedAccountIds,
 } from '../BilibiliCookieMgmt-web/src/utils/accountUtils.js'
+import { getAccountStatusDisplays } from '../BilibiliCookieMgmt-web/src/utils/accountStatusUtils.js'
 import { getQrLoginPollState, getQrLoginStatusText, QR_LOGIN_POLL_STATE } from '../BilibiliCookieMgmt-web/src/utils/qrLoginUtils.js'
 import { runManagedRequest } from '../BilibiliCookieMgmt-web/src/utils/requestUtils.js'
 import { buildUnauthorizedSessionState } from '../BilibiliCookieMgmt-web/src/utils/sessionUtils.js'
@@ -36,6 +37,28 @@ test('getToggledEnabledValue 会按当前启用状态取反', () => {
   assert.equal(getToggledEnabledValue({ managed: { is_enabled: true } }), false)
   assert.equal(getToggledEnabledValue({ managed: { is_enabled: false } }), true)
   assert.equal(getToggledEnabledValue({ managed: {} }), true)
+})
+
+test('getAccountStatusDisplays 会显示有效账号基础状态', () => {
+  assert.deepEqual(getAccountStatusDisplays({ managed: { status: 'valid' } }).map((item) => item.label), ['有效'])
+})
+
+test('getAccountStatusDisplays 会为有效风控账号追加风控状态', () => {
+  assert.deepEqual(
+    getAccountStatusDisplays({ managed: { status: 'valid', risk_controlled: true } }).map((item) => item.label),
+    ['有效', '风控']
+  )
+})
+
+test('getAccountStatusDisplays 不为无效账号显示遗留风控状态', () => {
+  assert.deepEqual(
+    getAccountStatusDisplays({ managed: { status: 'invalid', risk_controlled: true } }).map((item) => item.label),
+    ['无效']
+  )
+})
+
+test('getAccountStatusDisplays 会兼容缺失状态', () => {
+  assert.deepEqual(getAccountStatusDisplays({ managed: {} }).map((item) => item.label), ['未知'])
 })
 
 test('二维码轮询状态按当前 API 契约判断成功、过期与等待', () => {

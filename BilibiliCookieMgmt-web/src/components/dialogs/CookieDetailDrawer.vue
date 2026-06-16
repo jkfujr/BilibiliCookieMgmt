@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 
 import { getAccountTags } from '../../utils/accountTagUtils'
+import { getAccountStatusDisplays } from '../../utils/accountStatusUtils'
 import { formatTime, getExpireTime } from '../../utils/accountUtils'
 
 const props = defineProps({
@@ -25,33 +26,10 @@ const props = defineProps({
 
 const emit = defineEmits(['update:modelValue', 'update:currentTab', 'copy'])
 
-const statusMap = {
-  valid: {
-    color: 'success',
-    icon: 'mdi-check',
-    label: '有效',
-  },
-  expired: {
-    color: 'warning',
-    icon: 'mdi-clock-outline',
-    label: '过期',
-  },
-  invalid: {
-    color: 'error',
-    icon: 'mdi-close-circle-outline',
-    label: '无效',
-  },
-  unknown: {
-    color: 'grey',
-    icon: '',
-    label: '未知',
-  },
-}
-
 const account = computed(() => props.cookie?.account || {})
 const managed = computed(() => account.value?.managed || {})
 const tags = computed(() => getAccountTags(account.value))
-const status = computed(() => statusMap[managed.value?.status] || statusMap.unknown)
+const statusDisplays = computed(() => getAccountStatusDisplays(account.value))
 const displayName = computed(() => props.screenshotMode ? '截图用户' : (managed.value?.username || '未知用户'))
 const displayId = computed(() => props.screenshotMode ? '114514' : (managed.value?.DedeUserID || '-'))
 
@@ -89,6 +67,8 @@ const formatTimeOrDash = (value) => formatTime(value) || '-'
       <div class="pa-5 overflow-y-auto flex-grow-1">
         <div class="d-flex align-center ga-2 mb-4">
           <v-chip
+            v-for="status in statusDisplays"
+            :key="status.key"
             :color="status.color"
             size="small"
             :prepend-icon="status.icon || undefined"
