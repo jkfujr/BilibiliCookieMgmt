@@ -1,5 +1,5 @@
 <script setup>
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 
 import { getSettings, updateSettings } from '../../api/settingsApi'
 
@@ -23,6 +23,16 @@ const clearGotifyToken = ref(false)
 const numberRules = [
   (value) => Number.isInteger(Number(value)) && Number(value) > 0 || '请输入正整数',
 ]
+
+const taskCleanupEnabled = computed({
+  get: () => settings.value?.TASKS?.history_retention_days !== null,
+  set: (enabled) => {
+    if (!settings.value?.TASKS) return
+    settings.value.TASKS.history_retention_days = enabled
+      ? settings.value.TASKS.history_retention_days || 30
+      : null
+  },
+})
 
 const loadSettings = async () => {
   loading.value = true
@@ -51,6 +61,9 @@ const buildPayload = () => {
   payload.SCHEDULER.COOKIE_REFRESH.scan_interval_seconds = normalizeNumber(payload.SCHEDULER.COOKIE_REFRESH.scan_interval_seconds)
   payload.SCHEDULER.BILI_TICKET_REFRESH.interval_seconds = normalizeNumber(payload.SCHEDULER.BILI_TICKET_REFRESH.interval_seconds)
   payload.SCHEDULER.RISK_CONTROL_CHECK.interval_seconds = normalizeNumber(payload.SCHEDULER.RISK_CONTROL_CHECK.interval_seconds)
+  if (payload.TASKS.history_retention_days !== null) {
+    payload.TASKS.history_retention_days = normalizeNumber(payload.TASKS.history_retention_days)
+  }
 
   payload.API_TOKEN.token = {}
   if (clearApiToken.value) {
@@ -233,6 +246,33 @@ onMounted(loadSettings)
               hide-details
               inset
             ></v-switch>
+          </v-card-text>
+        </v-card>
+
+        <v-card elevation="2" class="mb-4">
+          <v-card-title class="d-flex align-center ga-2">
+            <v-icon icon="mdi-history"></v-icon>
+            任务历史
+          </v-card-title>
+          <v-card-text>
+            <v-switch
+              v-model="taskCleanupEnabled"
+              color="primary"
+              label="自动清理任务历史"
+              hide-details
+              inset
+              class="mb-3"
+            ></v-switch>
+            <v-text-field
+              v-model.number="settings.TASKS.history_retention_days"
+              label="保留天数"
+              type="number"
+              suffix="天"
+              variant="outlined"
+              density="comfortable"
+              :rules="taskCleanupEnabled ? numberRules : []"
+              :disabled="!taskCleanupEnabled"
+            ></v-text-field>
           </v-card-text>
         </v-card>
       </v-col>

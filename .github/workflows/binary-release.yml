@@ -75,12 +75,37 @@ jobs:
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install fastapi uvicorn pyyaml httpx aiofiles pyinstaller
+          pip install fastapi uvicorn pyyaml httpx aiofiles aiosqlite cryptography pyinstaller
 
       - name: Build with PyInstaller
         working-directory: ./BilibiliCookieMgmt
         run: |
           pyinstaller --onefile --name "BilibiliCookieMgmt-CLI-${{ matrix.platform }}-${{ matrix.arch }}" --add-data "static${{ matrix.sep }}static" main.py
+
+      - name: Smoke test Windows persistent data path
+        if: runner.os == 'Windows'
+        shell: pwsh
+        working-directory: ./BilibiliCookieMgmt/dist
+        run: |
+          $exe = Get-ChildItem -Filter "BilibiliCookieMgmt-CLI-*.exe" | Select-Object -First 1
+          $process = Start-Process -FilePath $exe.FullName -PassThru -WindowStyle Hidden
+          try {
+            $ready = $false
+            for ($attempt = 0; $attempt -lt 30; $attempt++) {
+              Start-Sleep -Seconds 1
+              try {
+                Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:18000/api/v1/health" | Out-Null
+                $ready = $true
+                break
+              } catch {}
+            }
+            if (-not $ready) { throw "打包程序未能启动" }
+            foreach ($path in @("data/config.json", "data/data.db", "data/data.key")) {
+              if (-not (Test-Path -LiteralPath $path)) { throw "缺少持久文件: $path" }
+            }
+          } finally {
+            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+          }
 
       - name: Prepare Artifacts (Unix)
         if: runner.os != 'Windows'

@@ -1,5 +1,6 @@
 <script setup>
 import { ref } from 'vue'
+import { useDisplay } from 'vuetify'
 
 import { createApiClient } from './api/client'
 import AccountTable from './components/accounts/AccountTable.vue'
@@ -13,12 +14,15 @@ import TagEditorDialog from './components/dialogs/TagEditorDialog.vue'
 import TestCookieDialog from './components/dialogs/TestCookieDialog.vue'
 import AppSidebar from './components/layout/AppSidebar.vue'
 import SettingsPage from './components/settings/SettingsPage.vue'
+import TaskCenterPage from './components/tasks/TaskCenterPage.vue'
 import { useCookieDashboard } from './composables/useCookieDashboard'
 import { useQrLogin } from './composables/useQrLogin'
 import { useSession } from './composables/useSession'
+import { useTaskCenter } from './composables/useTaskCenter'
 
 const drawer = ref(true)
 const activeView = ref('dashboard')
+const { mobile } = useDisplay()
 const snackbar = ref({
   show: false,
   text: '',
@@ -49,6 +53,18 @@ const apiClient = createApiClient({
   getToken,
   onUnauthorized: handleUnauthorized,
 })
+
+const taskCenter = useTaskCenter({
+  apiClient,
+  token,
+  showMsg,
+  isActive: () => activeView.value === 'tasks',
+})
+
+const createBackgroundTask = async (payload) => {
+  activeView.value = 'tasks'
+  return taskCenter.createAndOpen(payload)
+}
 
 const {
   availableTags,
@@ -102,6 +118,7 @@ const {
   apiClient,
   token,
   showMsg,
+  createBackgroundTask,
 })
 
 const {
@@ -175,6 +192,15 @@ const updateDeleteDialog = (value) => {
 
 const changeView = (view) => {
   activeView.value = view
+  if (mobile.value) drawer.value = false
+  if (view === 'dashboard') void fetchAccounts()
+  if (view === 'tasks') void taskCenter.fetchTasks()
+}
+
+const viewTitle = {
+  dashboard: '账号状态概览',
+  tasks: '任务中心',
+  settings: '系统设置',
 }
 
 const handleSettingsSaved = ({ result, apiToken }) => {
@@ -205,6 +231,7 @@ const handleSettingsSaved = ({ result, apiToken }) => {
       :has-token="hasToken"
       :screenshot-mode="screenshotMode"
       :active-view="activeView"
+      :active-task-count="taskCenter.state.activeCount"
       @update:drawer="drawer = $event"
       @change-view="changeView"
       @open-login="openLoginDialog"
@@ -216,7 +243,7 @@ const handleSettingsSaved = ({ result, apiToken }) => {
     <v-main class="bg-grey-lighten-4">
       <v-app-bar elevation="1">
         <v-app-bar-nav-icon @click="drawer = !drawer"></v-app-bar-nav-icon>
-        <v-app-bar-title>{{ activeView === 'settings' ? '系统设置' : '账号状态概览' }}</v-app-bar-title>
+        <v-app-bar-title>{{ viewTitle[activeView] || 'Bili Cookie Mgmt' }}</v-app-bar-title>
         <v-spacer></v-spacer>
         <v-btn
           v-if="activeView === 'dashboard'"
@@ -272,8 +299,14 @@ const handleSettingsSaved = ({ result, apiToken }) => {
           </v-card>
         </template>
 
+        <TaskCenterPage
+          v-else-if="activeView === 'tasks'"
+          :center="taskCenter"
+          :screenshot-mode="screenshotMode"
+        />
+
         <SettingsPage
-          v-else
+          v-else-if="activeView === 'settings'"
           :api-client="apiClient"
           @saved="handleSettingsSaved"
           @error="showMsg($event, 'error')"

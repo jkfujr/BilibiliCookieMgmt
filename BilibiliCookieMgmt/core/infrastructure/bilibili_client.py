@@ -99,12 +99,8 @@ class BilibiliClient:
             logger.error(f"轮询二维码网络请求失败: {e}")
             return {"code": -1, "message": f"网络错误: {e}"}
 
-    async def check_cookie_valid(self, header_string: str) -> bool:
-        """
-        检查 Cookie 是否有效: 调用导航接口, 判断是否登录
-        - header_string: 形如 "SESSDATA=...; bili_jct=...; DedeUserID=..." 的 Cookie 请求头字符串
-        返回布尔值: True 表示有效；False 表示无效或请求失败
-        """
+    async def inspect_cookie(self, header_string: str) -> Dict[str, Any]:
+        """调用导航接口并区分有效、无效与请求失败。"""
         url = "https://api.bilibili.com/x/web-interface/nav"
         headers = {
             "User-Agent": USER_AGENT,
@@ -113,32 +109,47 @@ class BilibiliClient:
         }
         try:
             rsp = await self._client.get(url, headers=headers, timeout=10.0)
+            rsp.raise_for_status()
             data = rsp.json()
-            return bool(data.get("code") == 0 and data.get("data", {}).get("isLogin"))
-        except httpx.HTTPError as e:
-            logger.error(f"检查 Cookie 有效性网络请求失败: {e}")
-            return False
-
-    async def get_nav(self, header_string: str) -> Optional[Dict[str, Any]]:
-        """
-        获取导航信息(包含 isLogin、uname 等)。
-        成功返回 data 字典；失败返回 None。
-        """
-        url = "https://api.bilibili.com/x/web-interface/nav"
-        headers = {
-            "User-Agent": USER_AGENT,
-            "Referer": "https://www.bilibili.com/",
-            "Cookie": header_string,
-        }
-        try:
-            rsp = await self._client.get(url, headers=headers, timeout=10.0)
-            data = rsp.json()
-            if data.get("code") == 0:
-                return data.get("data", {})
-            return None
+            code = data.get("code")
+            nav = data.get("data", {}) if isinstance(data.get("data"), dict) else {}
+            message = str(data.get("message") or data.get("msg") or "")
+            if code == 0 and nav.get("isLogin"):
+                return {
+                    "status": "valid",
+                    "is_valid": True,
+                    "code": 0,
+                    "bili_code": code,
+                    "message": "ok",
+                    "username": nav.get("uname") or nav.get("username"),
+                }
+            if code == -101 or (code == 0 and not nav.get("isLogin")):
+                return {
+                    "status": "invalid",
+                    "is_valid": False,
+                    "code": 200,
+                    "bili_code": code,
+                    "message": message or "Cookie 无效",
+                    "username": None,
+                }
+            return {
+                "status": "failed",
+                "is_valid": False,
+                "code": 502,
+                "bili_code": code,
+                "message": message or "Bilibili 接口返回异常",
+                "username": None,
+            }
         except Exception as e:
-            logger.error(f"获取导航信息失败: {e}")
-            return None
+            logger.error(f"检查 Cookie 有效性失败: {e}")
+            return {
+                "status": "failed",
+                "is_valid": False,
+                "code": 502,
+                "bili_code": None,
+                "message": f"检查失败: {e}",
+                "username": None,
+            }
 
     async def fetch_buvid(self, header_string: str) -> Optional[Dict[str, Any]]:
         """

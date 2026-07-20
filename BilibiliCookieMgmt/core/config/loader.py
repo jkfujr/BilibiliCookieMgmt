@@ -7,9 +7,24 @@ import argparse
 import json
 import logging
 import secrets
+import sys
 import yaml
 
-APP_ROOT = Path(__file__).resolve().parents[2]
+
+def resolve_app_root(
+    module_file: str | Path = __file__,
+    *,
+    frozen: bool | None = None,
+    executable: str | Path | None = None,
+) -> Path:
+    """解析持久数据根目录，冻结程序使用可执行文件所在目录。"""
+    is_frozen = bool(getattr(sys, "frozen", False)) if frozen is None else frozen
+    if is_frozen:
+        return Path(executable or sys.executable).resolve().parent
+    return Path(module_file).resolve().parents[2]
+
+
+APP_ROOT = resolve_app_root()
 DEFAULT_CONFIG_FILE = APP_ROOT / "data" / "config.json"
 DEFAULT_COOKIE_DIR = APP_ROOT / "data" / "cookie"
 LEGACY_CONFIG_FILE = APP_ROOT / "config.yaml"
@@ -64,6 +79,11 @@ class BiliConfig:
 
 
 @dataclass
+class TasksConfig:
+    history_retention_days: Optional[int] = 30
+
+
+@dataclass
 class AppConfig:
     host: str = "0.0.0.0"
     port: int = 18000
@@ -72,7 +92,10 @@ class AppConfig:
     gotify: GotifyConfig = field(default_factory=GotifyConfig)
     scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
     bili: BiliConfig = field(default_factory=BiliConfig)
+    tasks: TasksConfig = field(default_factory=TasksConfig)
     config_path: str = DEFAULT_CONFIG_PATH
+    database_path: str = (DEFAULT_CONFIG_FILE.parent / "data.db").as_posix()
+    encryption_key_path: str = (DEFAULT_CONFIG_FILE.parent / "data.key").as_posix()
 
 
 def _ensure_dirs(cfg: AppConfig) -> None:
@@ -117,6 +140,9 @@ def config_to_dict(cfg: AppConfig) -> Dict[str, Any]:
         "BILI": {
             "bili_ticket_enabled": cfg.bili.bili_ticket_enabled,
             "risk_control_enabled": cfg.bili.risk_control_enabled,
+        },
+        "TASKS": {
+            "history_retention_days": cfg.tasks.history_retention_days,
         },
     }
 
@@ -192,6 +218,9 @@ def _build_default_config_data(token: str) -> Dict[str, Any]:
             "bili_ticket_enabled": False,
             "risk_control_enabled": False,
         },
+        "TASKS": {
+            "history_retention_days": 30,
+        },
     }
 
 
@@ -205,6 +234,18 @@ def build_config(data: Dict[str, Any], config_path: str | Path = DEFAULT_CONFIG_
     ticket_refresh_cfg_src = scheduler_cfg.get("BILI_TICKET_REFRESH", {}) if scheduler_cfg else {}
     risk_check_cfg_src = scheduler_cfg.get("RISK_CONTROL_CHECK", {}) if scheduler_cfg else {}
     bili_cfg = data.get("BILI", {})
+    tasks_cfg = data.get("TASKS", {})
+    if tasks_cfg is None:
+        tasks_cfg = {}
+    if not isinstance(tasks_cfg, dict):
+        raise ValueError("TASKS 必须是对象")
+    retention_days = tasks_cfg.get("history_retention_days", 30)
+    if retention_days is not None:
+        if isinstance(retention_days, bool) or not isinstance(retention_days, int) or retention_days <= 0:
+            raise ValueError("TASKS.history_retention_days 必须是正整数或 null")
+
+    resolved_config_path = Path(config_path).resolve()
+    data_dir = resolved_config_path.parent
 
     return AppConfig(
         host=str(data.get("HOST", "0.0.0.0")),
@@ -244,7 +285,10 @@ def build_config(data: Dict[str, Any], config_path: str | Path = DEFAULT_CONFIG_
             bili_ticket_enabled=bool(bili_cfg.get("bili_ticket_enabled", False)),
             risk_control_enabled=bool(bili_cfg.get("risk_control_enabled", False)),
         ),
-        config_path=Path(config_path).as_posix(),
+        tasks=TasksConfig(history_retention_days=retention_days),
+        config_path=resolved_config_path.as_posix(),
+        database_path=(data_dir / "data.db").as_posix(),
+        encryption_key_path=(data_dir / "data.key").as_posix(),
     )
 
 

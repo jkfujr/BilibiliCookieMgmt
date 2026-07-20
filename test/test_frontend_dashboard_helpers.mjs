@@ -11,6 +11,8 @@ import { getAccountStatusDisplays } from '../BilibiliCookieMgmt-web/src/utils/ac
 import { getQrLoginPollState, getQrLoginStatusText, QR_LOGIN_POLL_STATE } from '../BilibiliCookieMgmt-web/src/utils/qrLoginUtils.js'
 import { runManagedRequest } from '../BilibiliCookieMgmt-web/src/utils/requestUtils.js'
 import { buildUnauthorizedSessionState } from '../BilibiliCookieMgmt-web/src/utils/sessionUtils.js'
+import { parseCookieLines, validateCookieLines } from '../BilibiliCookieMgmt-web/src/utils/cookieInputUtils.js'
+import { taskProgress } from '../BilibiliCookieMgmt-web/src/utils/taskUtils.js'
 
 test('clearTagFilterState 只清空标签选择，不重置匹配模式', () => {
   const nextState = clearTagFilterState('all')
@@ -164,4 +166,21 @@ test('runManagedRequest 遇到 401 时不重复提示错误', async () => {
 
   assert.equal(result.ok, false)
   assert.deepEqual(messages, [])
+})
+
+test('parseCookieLines 保留原始行号、重复项并忽略空行', () => {
+  assert.deepEqual(parseCookieLines('A=1\r\n\r\n B=2 \nA=1'), [
+    { line_number: 1, cookie: 'A=1' },
+    { line_number: 3, cookie: 'B=2' },
+    { line_number: 4, cookie: 'A=1' },
+  ])
+})
+
+test('validateCookieLines 拒绝空输入和超长单行', () => {
+  assert.equal(validateCookieLines([]), '请输入至少一条 Cookie')
+  assert.match(validateCookieLines([{ line_number: 7, cookie: 'x'.repeat(8193) }]), /第 7 行/)
+})
+
+test('taskProgress 汇总所有终态数量', () => {
+  assert.equal(taskProgress({ total: 10, succeeded: 3, invalid: 2, failed: 1, skipped: 1, cancelled: 1 }), 80)
 })

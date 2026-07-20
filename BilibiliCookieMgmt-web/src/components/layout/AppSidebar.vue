@@ -16,6 +16,10 @@ defineProps({
     type: String,
     required: true,
   },
+  activeTaskCount: {
+    type: Number,
+    default: 0,
+  },
 })
 
 const emit = defineEmits([
@@ -67,6 +71,17 @@ const emit = defineEmits([
         color="primary"
         @click="emit('change-view', 'dashboard')"
       ></v-list-item>
+      <v-list-item
+        prepend-icon="mdi-clipboard-text-clock-outline"
+        title="任务中心"
+        :active="activeView === 'tasks'"
+        color="primary"
+        @click="emit('change-view', 'tasks')"
+      >
+        <template v-if="activeTaskCount > 0" #append>
+          <v-badge :content="activeTaskCount" inline color="primary"></v-badge>
+        </template>
+      </v-list-item>
       <v-list-item
         prepend-icon="mdi-cog-outline"
         title="设置"

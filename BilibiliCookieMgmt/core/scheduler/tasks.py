@@ -7,13 +7,13 @@ from __future__ import annotations
 """
 
 import asyncio
+import contextlib
 import logging
 from typing import List, Optional
 
 from fastapi import FastAPI
 
-from ..services.cookie_service import CookieService
-from ..infrastructure.repositories.cookie_repository import MANAGED_KEY
+from ..services.task_service import TaskService
 from ..config.loader import AppConfig
 
 
@@ -21,8 +21,8 @@ logger = logging.getLogger(__name__)
 
 
 class AppScheduler:
-    def __init__(self, service: CookieService, config: AppConfig):
-        self.service = service
+    def __init__(self, task_service: TaskService, config: AppConfig):
+        self.task_service = task_service
         self.config = config
         self._tasks: List[asyncio.Task] = []
         self._stopping = asyncio.Event()
@@ -52,12 +52,12 @@ class AppScheduler:
         """请求停止并取消所有任务。"""
         logger.info("停止所有调度任务...")
         self._stopping.set()
-        for t in self._tasks:
+        _, pending = await asyncio.wait(self._tasks, timeout=0.25) if self._tasks else (set(), set())
+        for t in pending:
             t.cancel()
-            try:
+        for t in self._tasks:
+            with contextlib.suppress(asyncio.CancelledError):
                 await t
-            except asyncio.CancelledError:
-                pass
         self._tasks.clear()
         logger.info("调度任务已停止")
 
@@ -66,15 +66,9 @@ class AppScheduler:
         logger.info(f"Cookie 检查循环已启动, 间隔: {interval}秒")
         while not self._stopping.is_set():
             try:
-                # 遍历所有 cookie 执行检查
-                items = await self.service.list_cookies()
-                if items:
-                    logger.debug(f"开始检查 {len(items)} 个 Cookie")
-                for doc in items:
-                    info = doc.get(MANAGED_KEY, {}) if isinstance(doc.get(MANAGED_KEY), dict) else {}
-                    dede_user_id = info.get("DedeUserID")
-                    if dede_user_id:
-                        await self.service.check_cookie(dede_user_id)
+                task = await self.task_service.create_scheduled_cookie_check()
+                if task:
+                    await self.task_service.wait(task["id"])
             except Exception as e:
                 logger.error(f"Cookie 检查循环异常: {e}", exc_info=True)
             await asyncio.sleep(interval)
@@ -84,7 +78,9 @@ class AppScheduler:
         logger.info(f"bili_ticket 刷新循环已启动, 间隔: {interval}秒")
         while not self._stopping.is_set():
             try:
-                await self.service.refresh_expiring_tickets()
+                task = await self.task_service.create_scheduled_ticket_refresh()
+                if task:
+                    await self.task_service.wait(task["id"])
             except Exception as e:
                 logger.error(f"bili_ticket 刷新循环异常: {e}", exc_info=True)
             await asyncio.sleep(interval)
@@ -95,7 +91,9 @@ class AppScheduler:
         logger.info(f"Cookie 刷新循环已启动, 扫描间隔: {scan_interval}秒, 临期阈值: {threshold}秒")
         while not self._stopping.is_set():
             try:
-                await self.service.refresh_expiring_cookies(threshold)
+                task = await self.task_service.create_scheduled_cookie_refresh(threshold)
+                if task:
+                    await self.task_service.wait(task["id"])
             except Exception as e:
                 logger.error(f"Cookie 刷新循环异常: {e}", exc_info=True)
             await asyncio.sleep(scan_interval)
@@ -105,7 +103,9 @@ class AppScheduler:
         logger.info(f"风控检测循环已启动, 间隔: {interval}秒")
         while not self._stopping.is_set():
             try:
-                await self.service.check_risk_control_for_all()
+                task = await self.task_service.create_scheduled_risk_check()
+                if task:
+                    await self.task_service.wait(task["id"])
             except Exception as e:
                 logger.error(f"风控检测循环异常: {e}", exc_info=True)
             await asyncio.sleep(interval)

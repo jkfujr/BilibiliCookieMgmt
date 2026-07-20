@@ -6,6 +6,7 @@ Cookie 业务服务: 封装领域规则, 仅做一件事、写干净的业务逻
 
 import logging
 import copy
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
@@ -19,6 +20,13 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 SENSITIVE_COOKIE_NAMES = {"b_nut", "bili_ticket"}
+
+
+@dataclass
+class CookieCheckResult:
+    status: str
+    message: Optional[str]
+    document: Optional[Dict[str, Any]]
 
 
 def _normalize_tags(tags: List[str]) -> List[str]:
@@ -85,8 +93,8 @@ class CookieService:
         # 首轮检查
         try:
             checked = await self.check_cookie(dede_user_id)
-            if checked:
-                doc = checked
+            if checked.document:
+                doc = checked.document
         except Exception as e:
             logger.warning(f"扫码后置处理-首轮检查异常: {e}")
 
@@ -107,7 +115,7 @@ class CookieService:
     async def delete_cookie(self, dede_user_id: str) -> bool:
         return await self.repo.delete(dede_user_id)
 
-    async def check_cookie(self, dede_user_id: str) -> Optional[Dict[str, Any]]:
+    async def check_cookie(self, dede_user_id: str) -> CookieCheckResult:
         """
         Cookie 有效性检查(接入 BilibiliClient): 
         - 从存储获取 header_string(若缺失则根据 cookies 构建)
@@ -116,7 +124,7 @@ class CookieService:
         """
         doc = await self.repo.get(dede_user_id)
         if not doc:
-            return None
+            return CookieCheckResult("failed", "Cookie 不存在", None)
 
         info = doc.get(MANAGED_KEY, {}) if isinstance(doc.get(MANAGED_KEY), dict) else {}
         header_string = info.get("header_string")
@@ -136,40 +144,35 @@ class CookieService:
             cookie_map = CookieRepository._extract_cookie_map(raw)
             header_string = self.repo._build_managed_header_string(cookie_map)
 
-        is_valid = True
-        error_message: str | None = None
-        username_for_update: Optional[str] = None
-        if self.client:
-            try:
-                is_valid = await self.client.check_cookie_valid(header_string)
-                if not is_valid:
-                    error_message = "Cookie 无效"
-                else:
-                    try:
-                        nav_data = await self.client.get_nav(header_string)
-                        if nav_data and nav_data.get("isLogin"):
-                            username_for_update = nav_data.get("uname") or nav_data.get("username")
-                    except Exception:
-                        pass
-            except Exception as e:
-                is_valid = False
-                error_message = f"检查失败: {e}"
+        inspection = (
+            await self.client.inspect_cookie(header_string)
+            if self.client
+            else {
+                "status": "failed",
+                "message": "Bilibili 客户端未初始化",
+                "username": None,
+            }
+        )
+        inspection_status = str(inspection.get("status") or "failed")
+        stored_status = inspection_status if inspection_status in {"valid", "invalid"} else None
+        error_message = None if inspection_status == "valid" else str(inspection.get("message") or "检查失败")
 
-        result = await self.repo.update_check_status(
+        result = await self.repo.update_check_result(
             dede_user_id,
-            valid=is_valid,
+            status=stored_status,
             error_message=error_message,
-            username=username_for_update,
+            username=inspection.get("username"),
             header_string=header_string,
         )
-        if not is_valid:
+        if inspection_status == "failed":
+            logger.warning(f"Cookie 检查请求失败: {dede_user_id}, 原因: {error_message}")
+        elif inspection_status == "invalid":
             logger.warning(f"Cookie 检查失败: {dede_user_id}, 原因: {error_message}")
         else:
             logger.debug(f"Cookie 检查通过: {dede_user_id}")
 
-        # 失效则通知
         try:
-            if not is_valid:
+            if inspection_status == "invalid":
                 await self.notification.send(
                     title="Cookie 失效",
                     message=f"用户 {dede_user_id} 的 Cookie 已失效, 请尽快处理。",
@@ -179,7 +182,7 @@ class CookieService:
                 pass
         except Exception as e:
             logger.error(f"Cookie 检查通知发送失败: {e}", exc_info=True)
-        return result
+        return CookieCheckResult(inspection_status, error_message, result)
 
     async def refresh_cookie(self, dede_user_id: str) -> Optional[Dict[str, Any]]:
         """
@@ -252,8 +255,8 @@ class CookieService:
         # 刷新后健康检查
         try:
             checked = await self.check_cookie(dede_user_id)
-            if checked:
-                result = checked
+            if checked.document:
+                result = checked.document
         except Exception:
             pass
 
@@ -269,150 +272,23 @@ class CookieService:
 
         return result
 
-    async def check_cookies(self, ids: Optional[List[str]] = None, all: bool = False) -> Dict[str, Any]:
-        """
-        批量检查 Cookie 有效性。
-        - ids 提供时, 仅检查这些用户。
-        - all=True 时, 检查所有启用的 Cookie(is_enabled 为 True)。
-        返回执行摘要与明细。status 为 valid 计成功, 其余计失败。
-        """
-        target_ids: List[str] = []
-        if all:
-            items = await self.repo.list()
-            for doc in items:
-                info = doc.get(MANAGED_KEY, {}) if isinstance(doc.get(MANAGED_KEY), dict) else {}
-                if not info.get("is_enabled", True):
-                    continue
-                uid = info.get("DedeUserID")
-                if uid:
-                    target_ids.append(str(uid))
-        elif ids:
-            target_ids = [str(i) for i in ids if i]
+    async def refresh_cookie_if_expiring(self, dede_user_id: str, threshold_seconds: int) -> Dict[str, Any]:
+        """按 SESSDATA 有效期处理单个账号。"""
+        doc = await self.repo.get(dede_user_id)
+        if not doc:
+            return {"status": "failed", "message": "Cookie 不存在"}
+        raw = doc.get(RAW_KEY, {}) if isinstance(doc.get(RAW_KEY), dict) else {}
+        expires = self._get_sessdata_expires(raw)
+        if expires is None:
+            return {"status": "skipped", "message": "缺少或非法 SESSDATA.expires"}
+        if not self._cookie_needs_refresh(expires, threshold_seconds):
+            return {"status": "skipped", "message": "尚未临期"}
 
-        if not target_ids:
-            return {"ok": True, "total": 0, "succeeded": 0, "failed": 0, "details": []}
-
-        details: List[Dict[str, Any]] = []
-        succeeded = 0
-        failed = 0
-        for uid in target_ids:
-            try:
-                res = await self.check_cookie(uid)
-                if not res:
-                    details.append({"DedeUserID": uid, "ok": False, "message": "未找到"})
-                    failed += 1
-                    continue
-                info = res.get(MANAGED_KEY, {}) if isinstance(res.get(MANAGED_KEY), dict) else {}
-                if info.get("status") == "valid":
-                    details.append({"DedeUserID": uid, "ok": True})
-                    succeeded += 1
-                else:
-                    details.append({"DedeUserID": uid, "ok": False, "message": f"状态: {info.get('status')}"})
-                    failed += 1
-            except Exception as e:
-                details.append({"DedeUserID": uid, "ok": False, "message": f"异常: {e}"})
-                failed += 1
-
-        return {"ok": True, "total": len(target_ids), "succeeded": succeeded, "failed": failed, "details": details}
-
-    async def refresh_cookies(self, ids: Optional[List[str]] = None, all: bool = False) -> Dict[str, Any]:
-        """
-        批量刷新 Cookie。
-        - ids 提供时, 仅刷新这些用户。
-        - all=True 时, 刷新所有启用的 Cookie(is_enabled 为 True)。
-        返回执行摘要与明细。refresh_status 为 success 计成功, 其余计失败。
-        """
-        target_ids: List[str] = []
-        if all:
-            items = await self.repo.list()
-            for doc in items:
-                info = doc.get(MANAGED_KEY, {}) if isinstance(doc.get(MANAGED_KEY), dict) else {}
-                if not info.get("is_enabled", True):
-                    continue
-                uid = info.get("DedeUserID")
-                if uid:
-                    target_ids.append(str(uid))
-        elif ids:
-            target_ids = [str(i) for i in ids if i]
-
-        if not target_ids:
-            return {"ok": True, "total": 0, "succeeded": 0, "failed": 0, "details": []}
-
-        details: List[Dict[str, Any]] = []
-        succeeded = 0
-        failed = 0
-        for uid in target_ids:
-            try:
-                res = await self.refresh_cookie(uid)
-                if not res:
-                    details.append({"DedeUserID": uid, "ok": False, "message": "未找到"})
-                    failed += 1
-                    continue
-                info = res.get(MANAGED_KEY, {}) if isinstance(res.get(MANAGED_KEY), dict) else {}
-                if info.get("refresh_status") == "success":
-                    details.append({"DedeUserID": uid, "ok": True})
-                    succeeded += 1
-                else:
-                    details.append({"DedeUserID": uid, "ok": False, "message": f"刷新状态: {info.get('refresh_status')}"})
-                    failed += 1
-            except Exception as e:
-                details.append({"DedeUserID": uid, "ok": False, "message": f"异常: {e}"})
-                failed += 1
-
-        return {"ok": True, "total": len(target_ids), "succeeded": succeeded, "failed": failed, "details": details}
-
-    async def refresh_expiring_cookies(self, threshold_seconds: int) -> Dict[str, Any]:
-        """
-        自动刷新即将过期的 Cookie。
-        仅以 SESSDATA.expires 判断是否临期, 不使用 last_refresh_time。
-        """
-        items = await self.repo.list()
-        total = 0
-        refreshed = 0
-        skipped = 0
-        failed = 0
-        details: List[Dict[str, Any]] = []
-
-        for doc in items:
-            info = doc.get(MANAGED_KEY, {}) if isinstance(doc.get(MANAGED_KEY), dict) else {}
-            dede_user_id = info.get("DedeUserID")
-            if not dede_user_id:
-                continue
-
-            total += 1
-            raw = doc.get(RAW_KEY, {}) if isinstance(doc.get(RAW_KEY), dict) else {}
-            expires = self._get_sessdata_expires(raw)
-            if expires is None:
-                skipped += 1
-                message = "缺少或非法 SESSDATA.expires"
-                details.append({"DedeUserID": dede_user_id, "ok": True, "skipped": True, "message": message})
-                logger.warning(f"跳过自动刷新: {dede_user_id}, 原因: {message}")
-                continue
-
-            if not self._cookie_needs_refresh(expires, threshold_seconds):
-                skipped += 1
-                continue
-
-            try:
-                result = await self.refresh_cookie(str(dede_user_id))
-                result_info = result.get(MANAGED_KEY, {}) if result and isinstance(result.get(MANAGED_KEY), dict) else {}
-                if result_info.get("refresh_status") == "success":
-                    refreshed += 1
-                    details.append({"DedeUserID": dede_user_id, "ok": True})
-                    logger.info(f"Cookie 自动刷新成功: {dede_user_id}")
-                else:
-                    failed += 1
-                    message = f"刷新状态: {result_info.get('refresh_status')}"
-                    details.append({"DedeUserID": dede_user_id, "ok": False, "message": message})
-            except Exception as e:
-                failed += 1
-                details.append({"DedeUserID": dede_user_id, "ok": False, "message": f"异常: {e}"})
-                logger.error(f"Cookie 自动刷新失败: {dede_user_id}, 错误: {e}", exc_info=True)
-
-        if total > 0:
-            logger.info(f"Cookie 自动刷新扫描完成: 总计 {total}, 已刷新 {refreshed}, 跳过 {skipped}, 失败 {failed}")
-
-        return {"ok": True, "total": total, "refreshed": refreshed, "skipped": skipped, "failed": failed, "details": details}
+        result = await self.refresh_cookie(dede_user_id)
+        info = result.get(MANAGED_KEY, {}) if result and isinstance(result.get(MANAGED_KEY), dict) else {}
+        if info.get("refresh_status") == "success":
+            return {"status": "succeeded", "message": "刷新成功"}
+        return {"status": "failed", "message": info.get("error_message") or "刷新失败"}
 
     async def test_cookie(self, header_string: str) -> Dict[str, Any]:
         """
@@ -427,11 +303,7 @@ class CookieService:
         if not self.client:
             return {"code": 500, "is_valid": False, "message": "Bilibili 客户端未初始化"}
 
-        try:
-            ok = await self.client.check_cookie_valid(header_string)
-            return {"code": 0 if ok else 200, "is_valid": bool(ok), "message": "ok" if ok else "Cookie 无效"}
-        except Exception as e:
-            return {"code": 502, "is_valid": False, "message": f"检查失败: {e}"}
+        return await self.client.inspect_cookie(header_string)
 
     async def set_enabled(self, dede_user_id: str, is_enabled: bool) -> Optional[Dict[str, Any]]:
         """设置启用/禁用状态(仅影响随机 Cookie 选择)。"""
@@ -583,118 +455,61 @@ class CookieService:
         except (TypeError, ValueError):
             return True
 
-    async def refresh_expiring_tickets(self) -> Dict[str, Any]:
-        """
-        遍历所有 Cookie，检查 bili_ticket 是否即将过期并刷新。
-        仅当 bili_ticket_enabled 为 True 时执行。
-        返回执行摘要: {ok, total, refreshed, skipped, failed, details}
-        """
+    async def refresh_ticket_if_expiring(self, dede_user_id: str) -> Dict[str, Any]:
+        """按有效期刷新单个账号的 bili_ticket。"""
         if not self.config.bili.bili_ticket_enabled or not self.client:
-            return {"ok": True, "total": 0, "refreshed": 0, "skipped": 0, "failed": 0, "details": []}
+            return {"status": "skipped", "message": "bili_ticket 未启用"}
+        doc = await self.repo.get(dede_user_id)
+        if not doc:
+            return {"status": "failed", "message": "Cookie 不存在"}
+        raw = doc.get(RAW_KEY, {}) if isinstance(doc.get(RAW_KEY), dict) else {}
+        if not self._ticket_needs_refresh(raw):
+            return {"status": "skipped", "message": "ticket 尚未临期"}
+        updated = await self._refresh_bili_ticket(dede_user_id)
+        if updated:
+            return {"status": "succeeded", "message": "ticket 刷新成功"}
+        return {"status": "failed", "message": "获取 ticket 返回空"}
 
-        items = await self.repo.list()
-        total = 0
-        refreshed = 0
-        skipped = 0
-        failed = 0
-        details: List[Dict[str, Any]] = []
-
-        for doc in items:
-            info = doc.get(MANAGED_KEY, {}) if isinstance(doc.get(MANAGED_KEY), dict) else {}
-            dede_user_id = info.get("DedeUserID")
-            if not dede_user_id:
-                continue
-
-            total += 1
-            raw = doc.get(RAW_KEY, {}) if isinstance(doc.get(RAW_KEY), dict) else {}
-            if not self._ticket_needs_refresh(raw):
-                skipped += 1
-                continue
-
-            try:
-                ticket = await self._refresh_bili_ticket(dede_user_id)
-                if ticket:
-                    refreshed += 1
-                    details.append({"DedeUserID": dede_user_id, "ok": True})
-                    logger.info(f"bili_ticket 自动刷新成功: {dede_user_id}")
-                else:
-                    failed += 1
-                    details.append({"DedeUserID": dede_user_id, "ok": False, "message": "获取 ticket 返回空"})
-            except Exception as e:
-                failed += 1
-                details.append({"DedeUserID": dede_user_id, "ok": False, "message": str(e)})
-                logger.error(f"bili_ticket 自动刷新失败: {dede_user_id}, 错误: {e}")
-
-        if total > 0:
-            logger.info(f"bili_ticket 刷新扫描完成: 总计 {total}, 已刷新 {refreshed}, 跳过 {skipped}, 失败 {failed}")
-
-        return {"ok": True, "total": total, "refreshed": refreshed, "skipped": skipped, "failed": failed, "details": details}
-
-    async def check_risk_control_for_all(self) -> Dict[str, Any]:
-        """
-        遍历所有有效 Cookie 执行风控检测。
-        仅当 BILI 配置中 risk_control_enabled 启用时由独立调度任务调用。
-        返回执行摘要: {ok, total, checked, failed, details}
-        检测失败 (rc["ok"]=False) 不计入 checked, 也不覆盖已有风控状态。
-        """
+    async def check_risk_control(self, dede_user_id: str) -> Dict[str, Any]:
+        """检查单个有效账号的风控状态。"""
         if not self.config.bili.risk_control_enabled or not self.client:
-            return {"ok": True, "total": 0, "checked": 0, "failed": 0, "details": []}
+            return {"status": "skipped", "message": "风控检测未启用"}
+        doc = await self.repo.get(dede_user_id)
+        if not doc:
+            return {"status": "failed", "message": "Cookie 不存在"}
+        info = doc.get(MANAGED_KEY, {}) if isinstance(doc.get(MANAGED_KEY), dict) else {}
+        header_string = info.get("header_string")
+        if not header_string or str(info.get("status")) != "valid":
+            return {"status": "skipped", "message": "账号当前不可用"}
 
-        items = await self.repo.list()
-        total = 0
-        checked = 0
-        failed = 0
-        details: List[Dict[str, Any]] = []
-
-        for doc in items:
-            info = doc.get(MANAGED_KEY, {}) if isinstance(doc.get(MANAGED_KEY), dict) else {}
-            dede_user_id = info.get("DedeUserID")
-            header_string = info.get("header_string")
-            if not dede_user_id or not header_string:
-                continue
-            if str(info.get("status")) != "valid":
-                continue
-
-            total += 1
-            try:
-                rc = await self.client.check_risk_control(header_string)
-                if not rc.get("ok"):
-                    failed += 1
-                    details.append({"DedeUserID": dede_user_id, "ok": False, "message": rc.get("error_message", "检测失败")})
-                    await self.repo.update_risk_control(
-                        dede_user_id,
-                        checked_ok=False,
-                        error_message=rc.get("error_message", "检测失败"),
-                    )
-                    logger.warning(f"风控检测失败: {dede_user_id}, 错误: {rc.get('error_message')}")
-                    continue
-
-                await self.repo.update_risk_control(
-                    dede_user_id,
-                    checked_ok=True,
-                    risk_controlled=rc["risk_controlled"],
-                    voucher=rc.get("voucher"),
-                )
-                checked += 1
-                details.append({"DedeUserID": dede_user_id, "ok": True, "risk_controlled": rc["risk_controlled"]})
-                if rc["risk_controlled"]:
-                    logger.warning(f"账号风控: {dede_user_id}")
-                else:
-                    logger.debug(f"风控检测通过: {dede_user_id}")
-            except Exception as e:
-                failed += 1
-                details.append({"DedeUserID": dede_user_id, "ok": False, "message": str(e)})
+        try:
+            result = await self.client.check_risk_control(header_string)
+            if not result.get("ok"):
+                message = result.get("error_message", "检测失败")
                 await self.repo.update_risk_control(
                     dede_user_id,
                     checked_ok=False,
-                    error_message=str(e),
+                    error_message=message,
                 )
-                logger.error(f"风控检测异常: {dede_user_id}, 错误: {e}")
-
-        if total > 0:
-            logger.info(f"风控检测扫描完成: 总计 {total}, 已检测 {checked}, 失败 {failed}")
-
-        return {"ok": True, "total": total, "checked": checked, "failed": failed, "details": details}
+                return {"status": "failed", "message": message}
+            await self.repo.update_risk_control(
+                dede_user_id,
+                checked_ok=True,
+                risk_controlled=result["risk_controlled"],
+                voucher=result.get("voucher"),
+            )
+            return {
+                "status": "succeeded",
+                "message": "检测完成",
+                "risk_controlled": bool(result["risk_controlled"]),
+            }
+        except Exception as exc:
+            await self.repo.update_risk_control(
+                dede_user_id,
+                checked_ok=False,
+                error_message=str(exc),
+            )
+            return {"status": "failed", "message": str(exc)}
 
     async def get_random_cookie(self, fmt: str = "simple") -> Optional[Dict[str, Any]]:
         """

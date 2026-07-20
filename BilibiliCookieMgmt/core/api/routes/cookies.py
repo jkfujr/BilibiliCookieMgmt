@@ -7,7 +7,8 @@ Cookie 相关路由
 from fastapi import APIRouter, Depends, HTTPException, Query, Body
 from typing import List, Optional
 
-from ..deps import get_cookie_service
+from ..deps import get_cookie_service, get_task_service
+from ...services.task_service import TaskService
 from ...utils.security import require_api_token
 
 router = APIRouter(prefix="/cookies", tags=["cookies"], dependencies=[Depends(require_api_token)])
@@ -51,34 +52,40 @@ async def test_cookie(cookie: str = Body(..., embed=True, description="Cookie �
     return await service.test_cookie(cookie)
 
 
-@router.post("/check")
+@router.post("/check", status_code=202, deprecated=True)
 async def check_cookies(
     all: bool = Query(False, description="是否对全部 Cookie 执行检查"),
     ids: Optional[List[str]] = Body(None, embed=True, description="要检查的 DedeUserID 列表"),
-    service = Depends(get_cookie_service),
+    service: TaskService = Depends(get_task_service),
 ):
     """
     统一的批量检查接口: 
     - all=true: 检查全部启用的 Cookie
     - 提供 ids: 检查指定 ID 列表
-    返回执行摘要与明细列表。
+    返回已创建的后台任务。
     """
-    return await service.check_cookies(ids=ids, all=all)
+    try:
+        return await service.create_cookie_check(ids=ids, all=all)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.post("/refresh")
+@router.post("/refresh", status_code=202, deprecated=True)
 async def refresh_cookies(
     all: bool = Query(False, description="是否对全部 Cookie 执行刷新"),
     ids: Optional[List[str]] = Body(None, embed=True, description="要刷新的 DedeUserID 列表"),
-    service = Depends(get_cookie_service),
+    service: TaskService = Depends(get_task_service),
 ):
     """
     统一的批量刷新接口: 
     - all=true: 刷新全部启用的 Cookie
     - 提供 ids: 刷新指定 ID 列表
-    返回执行摘要与明细列表。
+    返回已创建的后台任务。
     """
-    return await service.refresh_cookies(ids=ids, all=all)
+    try:
+        return await service.create_cookie_refresh(ids=ids, all=all)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.patch("/{DedeUserID}/enabled")

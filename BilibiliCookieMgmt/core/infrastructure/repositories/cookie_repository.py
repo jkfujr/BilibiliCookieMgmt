@@ -245,12 +245,23 @@ class CookieRepository:
             return True
         return False
 
-    async def update_check_status(self, dede_user_id: str, valid: bool, error_message: Optional[str] = None, username: Optional[str] = None, header_string: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    async def update_check_result(
+        self,
+        dede_user_id: str,
+        status: Optional[str],
+        error_message: Optional[str] = None,
+        username: Optional[str] = None,
+        header_string: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """记录检查结果；status=None 时保留原有效状态。"""
         doc = await self.get(dede_user_id)
         if not doc:
             return None
         managed = doc.get(MANAGED_KEY, {}) if isinstance(doc.get(MANAGED_KEY), dict) else {}
-        managed["status"] = CookieStatus.VALID.value if valid else CookieStatus.INVALID.value
+        if status is not None:
+            if status not in {CookieStatus.VALID.value, CookieStatus.INVALID.value}:
+                raise ValueError("Cookie 检查状态非法")
+            managed["status"] = status
         managed["last_check_time"] = datetime.now().isoformat()
         managed["error_message"] = error_message
         if username:

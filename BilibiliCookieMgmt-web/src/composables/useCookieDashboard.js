@@ -1,17 +1,13 @@
 import { computed, ref, watch } from 'vue'
 
 import {
-  checkCookies,
   deleteCookieById,
   getCookieDetail,
   listCookies,
-  refreshCookies,
   setCookieEnabled,
   setCookieTags,
-  testCookieHeader,
 } from '../api/cookieApi'
 import {
-  appendAccountTags,
   extractAvailableTags,
   filterAccountsByTags,
   getAccountTags,
@@ -27,9 +23,10 @@ import {
   replaceAccountInList,
   syncSelectedAccountIds as syncAccountSelection,
 } from '../utils/accountUtils'
+import { parseCookieLines, validateCookieLines } from '../utils/cookieInputUtils'
 import { runManagedRequest } from '../utils/requestUtils'
 
-export const useCookieDashboard = ({ apiClient, token, showMsg } = {}) => {
+export const useCookieDashboard = ({ apiClient, token, showMsg, createBackgroundTask } = {}) => {
   const accounts = ref([])
   const loading = ref(false)
   const screenshotMode = ref(false)
@@ -87,52 +84,12 @@ export const useCookieDashboard = ({ apiClient, token, showMsg } = {}) => {
     return ids
   }
 
-  const getBatchMessage = (label, result) => {
-    const total = Number(result?.total ?? 0)
-    const succeeded = Number(result?.succeeded ?? result?.refreshed ?? 0)
-    const failed = Number(result?.failed ?? 0)
-    return `${label}完成：共 ${total} 个，成功 ${succeeded} 个，失败 ${failed} 个`
-  }
-
-  const runSequentialBatch = async ({ items, action }) => {
-    let succeeded = 0
-    let failed = 0
-
-    for (const item of items) {
-      try {
-        const result = await action(item)
-        if (result?.ok === false) {
-          failed += 1
-        } else {
-          succeeded += 1
-        }
-      } catch (error) {
-        failed += 1
-      }
-    }
-
-    return {
-      ok: failed === 0,
-      total: items.length,
-      succeeded,
-      failed,
-    }
-  }
-
-  const runBatchWithLoading = async ({ items, action, successLabel, emptyMessage }) => {
-    if (!items.length) {
-      showMsg?.(emptyMessage || '请先选择账号', 'warning')
+  const submitTask = async (payload) => {
+    if (typeof createBackgroundTask !== 'function') {
+      showMsg?.('任务服务不可用', 'error')
       return { ok: false }
     }
-
-    loading.value = true
-    try {
-      const result = await runSequentialBatch({ items, action })
-      showMsg?.(getBatchMessage(successLabel, result), result.failed ? 'warning' : 'success')
-      return result
-    } finally {
-      loading.value = false
-    }
+    return createBackgroundTask(payload)
   }
 
   const replaceAccount = (updatedDoc) => {
@@ -208,52 +165,15 @@ export const useCookieDashboard = ({ apiClient, token, showMsg } = {}) => {
     screenshotMode.value = !screenshotMode.value
   }
 
-  const checkAllCookies = async () => {
-    return runManagedRequest({
-      request: () => checkCookies(apiClient, { all: true }),
-      showMsg,
-      successMessage: '所有 Cookie 已检查完成',
-      errorMessage: '检查请求失败',
-      setLoading: (value) => {
-        loading.value = value
-      },
-      refreshAccounts: fetchAccounts,
-      shouldRefresh: true,
-    })
-  }
-
-  const refreshAllCookies = async () => {
-    return runManagedRequest({
-      request: () => refreshCookies(apiClient, { all: true }),
-      showMsg,
-      successMessage: '需要刷新的 Cookie 已刷新',
-      errorMessage: '刷新请求失败',
-      setLoading: (value) => {
-        loading.value = value
-      },
-      refreshAccounts: fetchAccounts,
-      shouldRefresh: true,
-    })
-  }
-
   const runSelectedCheck = async () => {
     const ids = getSelectedIdsOrWarn()
     if (!ids.length) {
       return { ok: false }
     }
 
-    return runManagedRequest({
-      request: () => checkCookies(apiClient, { ids }),
-      showMsg,
-      errorMessage: '检查请求失败',
-      setLoading: (value) => {
-        loading.value = value
-      },
-      refreshAccounts: fetchAccounts,
-      shouldRefresh: true,
-      getSuccessMessage: (result) => getBatchMessage('状态检查', result),
-      getSuccessColor: (result) => Number(result?.failed || 0) > 0 ? 'warning' : 'success',
-    })
+    const result = await submitTask({ type: 'cookie_check', ids })
+    if (result.ok) clearSelectedAccounts()
+    return result
   }
 
   const runSelectedRefresh = async () => {
@@ -262,18 +182,9 @@ export const useCookieDashboard = ({ apiClient, token, showMsg } = {}) => {
       return { ok: false }
     }
 
-    return runManagedRequest({
-      request: () => refreshCookies(apiClient, { ids }),
-      showMsg,
-      errorMessage: '刷新请求失败',
-      setLoading: (value) => {
-        loading.value = value
-      },
-      refreshAccounts: fetchAccounts,
-      shouldRefresh: true,
-      getSuccessMessage: (result) => getBatchMessage('自动刷新', result),
-      getSuccessColor: (result) => Number(result?.failed || 0) > 0 ? 'warning' : 'success',
-    })
+    const result = await submitTask({ type: 'cookie_refresh', ids })
+    if (result.ok) clearSelectedAccounts()
+    return result
   }
 
   const toggleEnabled = async (account) => {
@@ -295,16 +206,19 @@ export const useCookieDashboard = ({ apiClient, token, showMsg } = {}) => {
 
   const toggleSelectedEnabled = async () => {
     const selectedAccounts = getSelectedAccounts()
-    return runBatchWithLoading({
-      items: selectedAccounts,
-      successLabel: '开启/禁用',
-      action: async (account) => {
-        const dedeUserID = getAccountId(account)
-        const updatedDoc = await setCookieEnabled(apiClient, dedeUserID, getToggledEnabledValue(account))
-        replaceAccount(updatedDoc)
-        return { ok: true }
-      },
+    if (!selectedAccounts.length) {
+      showMsg?.('请先选择账号', 'warning')
+      return { ok: false }
+    }
+    const result = await submitTask({
+      type: 'cookie_enabled_update',
+      items: selectedAccounts.map((account) => ({
+        DedeUserID: getAccountId(account),
+        is_enabled: getToggledEnabledValue(account),
+      })),
     })
+    if (result.ok) clearSelectedAccounts()
+    return result
   }
 
   const openTagDialog = (account) => {
@@ -364,19 +278,16 @@ export const useCookieDashboard = ({ apiClient, token, showMsg } = {}) => {
       return { ok: false }
     }
 
-    const result = await runBatchWithLoading({
-      items: getSelectedAccounts(),
-      successLabel: '标签追加',
-      action: async (account) => {
-        const dedeUserID = getAccountId(account)
-        const updatedDoc = await setCookieTags(apiClient, dedeUserID, appendAccountTags(account, tagsToAppend))
-        replaceAccount(updatedDoc)
-        return { ok: true }
-      },
-    })
+    const ids = getSelectedAccountIds()
+    if (!ids.length) {
+      showMsg?.('请先选择账号', 'warning')
+      return { ok: false }
+    }
+    const result = await submitTask({ type: 'cookie_tag_append', ids, tags: tagsToAppend })
 
     if (result.ok) {
       closeTagDialog()
+      clearSelectedAccounts()
     }
 
     return result
@@ -438,24 +349,7 @@ export const useCookieDashboard = ({ apiClient, token, showMsg } = {}) => {
       return { ok: false }
     }
 
-    return runManagedRequest({
-      request: () => checkCookies(apiClient, { ids: [dedeUserID] }),
-      showMsg,
-      errorMessage: '检查请求失败',
-      refreshAccounts: fetchAccounts,
-      shouldRefresh: true,
-      getSuccessMessage: (result) => {
-        const detail = result?.details?.find((item) => item?.DedeUserID === dedeUserID)
-        if (!detail) {
-          return 'Cookie 检查完成'
-        }
-        return detail.ok ? 'Cookie 有效！' : `Cookie 无效: ${detail.message || ''}`
-      },
-      getSuccessColor: (result) => {
-        const detail = result?.details?.find((item) => item?.DedeUserID === dedeUserID)
-        return detail?.ok === false ? 'warning' : 'success'
-      },
-    })
+    return submitTask({ type: 'cookie_check', ids: [dedeUserID] })
   }
 
   const refreshCookie = async (account) => {
@@ -464,24 +358,7 @@ export const useCookieDashboard = ({ apiClient, token, showMsg } = {}) => {
       return { ok: false }
     }
 
-    return runManagedRequest({
-      request: () => refreshCookies(apiClient, { ids: [dedeUserID] }),
-      showMsg,
-      errorMessage: '刷新请求失败',
-      refreshAccounts: fetchAccounts,
-      shouldRefresh: true,
-      getSuccessMessage: (result) => {
-        const detail = result?.details?.find((item) => item?.DedeUserID === dedeUserID)
-        if (!detail) {
-          return '刷新完成'
-        }
-        return detail.ok ? '刷新成功' : `刷新失败: ${detail.message || ''}`
-      },
-      getSuccessColor: (result) => {
-        const detail = result?.details?.find((item) => item?.DedeUserID === dedeUserID)
-        return detail?.ok === false ? 'error' : 'success'
-      },
-    })
+    return submitTask({ type: 'cookie_refresh', ids: [dedeUserID] })
   }
 
   const requestDelete = (account) => {
@@ -530,16 +407,12 @@ export const useCookieDashboard = ({ apiClient, token, showMsg } = {}) => {
   }
 
   const deleteSelectedCookies = async () => {
-    const result = await runBatchWithLoading({
-      items: getSelectedAccounts(),
-      successLabel: '删除',
-      action: async (account) => {
-        const dedeUserID = getAccountId(account)
-        await deleteCookieById(apiClient, dedeUserID)
-        removeAccount(dedeUserID)
-        return { ok: true }
-      },
-    })
+    const ids = getSelectedAccountIds()
+    if (!ids.length) {
+      showMsg?.('请先选择账号', 'warning')
+      return { ok: false }
+    }
+    const result = await submitTask({ type: 'cookie_delete', ids })
 
     if (result.ok) {
       closeDeleteDialog()
@@ -566,23 +439,19 @@ export const useCookieDashboard = ({ apiClient, token, showMsg } = {}) => {
   }
 
   const testCookie = async () => {
-    const cookie = testCookieInput.value.trim()
-    if (!cookie) {
-      showMsg?.('请输入 Cookie 字符串', 'error')
+    const items = parseCookieLines(testCookieInput.value)
+    const error = validateCookieLines(items)
+    if (error) {
+      showMsg?.(error, 'error')
       return { ok: false }
     }
 
-    return runManagedRequest({
-      request: () => testCookieHeader(apiClient, cookie),
-      showMsg,
-      errorMessage: '测试请求失败',
-      getSuccessMessage: (result) => {
-        return result?.is_valid ? '该 Cookie 有效！' : `该 Cookie 无效: ${result?.message || ''}`
-      },
-      getSuccessColor: (result) => {
-        return result?.is_valid ? 'success' : 'error'
-      },
-    })
+    const result = await submitTask({ type: 'raw_cookie_validation', items })
+    if (result.ok) {
+      testCookieDialog.value = false
+      testCookieInput.value = ''
+    }
+    return result
   }
 
   watch(
@@ -634,8 +503,6 @@ export const useCookieDashboard = ({ apiClient, token, showMsg } = {}) => {
     fetchAccounts,
     clearTagFilter,
     toggleScreenshotMode,
-    checkAllCookies,
-    refreshAllCookies,
     setSelectedAccountIds,
     clearSelectedAccounts,
     getSelectedAccounts,

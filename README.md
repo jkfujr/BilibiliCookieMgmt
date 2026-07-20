@@ -22,7 +22,7 @@
 从 [发行版](https://github.com/jkfujr/BilibiliCookieMgmt/releases) 下载对应系统的最新构建。
 
 1. 解压下载的压缩包。
-2. 运行可执行文件，首次启动会在程序目录下自动生成 `data/config.json` 并在控制台输出初始 API Token。
+2. 运行可执行文件，首次启动会在程序目录下自动生成 `data/config.json`、`data/data.db`、`data/data.key`，并在控制台输出初始 API Token。
    - 若仍存在旧版根目录 `config.yaml`，首次启动会自动迁移到 `data/config.json`。
    - Windows: 双击 `BilibiliCookieMgmt-CLI-win-x64.exe`
    - Linux/macOS:
@@ -68,7 +68,7 @@ npm run build
 
 ```bash
 cd BilibiliCookieMgmt
-pip install fastapi uvicorn pyyaml httpx aiofiles
+pip install fastapi uvicorn pyyaml httpx aiofiles aiosqlite cryptography
 python main.py
 ```
 

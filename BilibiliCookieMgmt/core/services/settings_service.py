@@ -91,6 +91,13 @@ class SettingsService:
         bili = self._dict(payload, "BILI")
         base["BILI"]["bili_ticket_enabled"] = self._bool(bili, "bili_ticket_enabled", current.bili.bili_ticket_enabled)
         base["BILI"]["risk_control_enabled"] = self._bool(bili, "risk_control_enabled", current.bili.risk_control_enabled)
+
+        tasks = self._dict(payload, "TASKS")
+        base["TASKS"]["history_retention_days"] = self._optional_positive_int(
+            tasks,
+            "history_retention_days",
+            current.tasks.history_retention_days,
+        )
         return base
 
     def _merge_scheduler(self, target: Dict[str, Any], payload: Dict[str, Any], current: SchedulerConfig) -> None:
@@ -124,6 +131,7 @@ class SettingsService:
         current.gotify = replace(next_config.gotify)
         current.scheduler = self._copy_scheduler(next_config.scheduler)
         current.bili = replace(next_config.bili)
+        current.tasks = replace(next_config.tasks)
 
         service = self.app.state.cookie_service
         service.config = current
@@ -140,7 +148,7 @@ class SettingsService:
             old_scheduler = getattr(self.app.state, "scheduler", None)
             if old_scheduler is not None:
                 await old_scheduler.stop()
-            scheduler = AppScheduler(service=service, config=current)
+            scheduler = AppScheduler(task_service=self.app.state.task_service, config=current)
             await scheduler.start(self.app)
 
     @staticmethod
@@ -193,6 +201,15 @@ class SettingsService:
         value = self._int(data, key, default)
         if value <= 0:
             raise ValueError(f"{key} 必须是正整数")
+        return value
+
+    @staticmethod
+    def _optional_positive_int(data: Dict[str, Any], key: str, default: int | None) -> int | None:
+        value = data.get(key, default)
+        if value is None:
+            return None
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise ValueError(f"{key} 必须是正整数或 null")
         return value
 
     @staticmethod

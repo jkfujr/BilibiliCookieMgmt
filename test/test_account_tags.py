@@ -167,17 +167,28 @@ class FakeBilibiliClient:
     async def aclose(self) -> None:
         return None
 
-    async def check_cookie_valid(self, header_string: str) -> bool:
-        return "invalid" not in header_string
-
-    async def get_nav(self, header_string: str):
+    async def inspect_cookie(self, header_string: str):
         user_id = "unknown"
         for part in header_string.split(";"):
             key, _, value = part.strip().partition("=")
             if key == "DedeUserID":
                 user_id = value
                 break
-        return {"isLogin": True, "uname": f"用户{user_id}"}
+        if "invalid" in header_string:
+            return {
+                "status": "invalid",
+                "is_valid": False,
+                "code": 200,
+                "message": "Cookie 无效",
+                "username": None,
+            }
+        return {
+            "status": "valid",
+            "is_valid": True,
+            "code": 0,
+            "message": "ok",
+            "username": f"用户{user_id}",
+        }
 
     async def fetch_buvid(self, header_string: str):
         return {"b_3": "fake-buvid3", "b_4": "fake-buvid4"}
@@ -367,7 +378,7 @@ class RepositoryTagTests(unittest.IsolatedAsyncioTestCase):
         saved = await self.repo.save_from_raw(build_raw("1004"))
         join_time = saved["managed"]["join_time"]
 
-        checked = await self.repo.update_check_status("1004", valid=True, username="用户1004")
+        checked = await self.repo.update_check_result("1004", status="valid", username="用户1004")
         self.assertEqual(checked["managed"]["join_time"], join_time)
 
         refreshed = await self.repo.update_on_refresh(
@@ -506,18 +517,30 @@ class ApiTagTests(unittest.TestCase):
         asyncio.run(self._seed_data())
 
         self.client = TestClient(self.app)
+        self.client.__enter__()
         self.auth_headers = {"Authorization": "Bearer test-token"}
 
     def tearDown(self) -> None:
-        self.client.close()
+        self.client.__exit__(None, None, None)
         close_log_handlers()
         self.temp_dir.cleanup()
+
+    def _wait_task(self, task_id: str, timeout: float = 3.0) -> dict:
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            response = self.client.get(f"/api/v1/tasks/{task_id}", headers=self.auth_headers)
+            self.assertEqual(response.status_code, 200)
+            task = response.json()
+            if task["status"] in {"completed", "completed_with_errors", "cancelled", "failed"}:
+                return task
+            time.sleep(0.02)
+        self.fail("任务未在测试超时内结束")
 
     async def _seed_data(self) -> None:
         await self.repo.save_from_raw(build_raw("3001"))
         await self.repo.save_from_raw(build_raw("3002"))
-        await self.repo.update_check_status("3001", valid=True, username="用户3001")
-        await self.repo.update_check_status("3002", valid=False, username="用户3002")
+        await self.repo.update_check_result("3001", status="valid", username="用户3001")
+        await self.repo.update_check_result("3002", status="invalid", username="用户3002")
 
     def test_patch_tags_updates_and_list_returns_tags(self) -> None:
         response = self.client.patch(
@@ -577,16 +600,18 @@ class ApiTagTests(unittest.TestCase):
             headers=self.auth_headers,
             json={"ids": ["3001"]},
         )
-        self.assertEqual(check_response.status_code, 200)
-        self.assertTrue(check_response.json()["details"][0]["ok"])
+        self.assertEqual(check_response.status_code, 202)
+        checked_task = self._wait_task(check_response.json()["id"])
+        self.assertEqual(checked_task["succeeded"], 1)
 
         refresh_response = self.client.post(
             "/api/v1/cookies/refresh?all=false",
             headers=self.auth_headers,
             json={"ids": ["3001"]},
         )
-        self.assertEqual(refresh_response.status_code, 200)
-        self.assertTrue(refresh_response.json()["details"][0]["ok"])
+        self.assertEqual(refresh_response.status_code, 202)
+        refreshed_task = self._wait_task(refresh_response.json()["id"])
+        self.assertEqual(refreshed_task["succeeded"], 1)
 
         cookie_response = self.client.get("/api/v1/cookies/3001", headers=self.auth_headers)
         self.assertEqual(cookie_response.status_code, 200)
@@ -631,6 +656,114 @@ class ApiTagTests(unittest.TestCase):
         self.assertEqual(body["GOTIFY"]["token"], {"configured": False, "masked": ""})
         self.assertEqual(body["SCHEDULER"]["COOKIE_REFRESH"]["scan_interval_seconds"], 21600)
         self.assertNotIn("enable", body["SCHEDULER"]["BILI_TICKET_REFRESH"])
+        self.assertEqual(body["TASKS"]["history_retention_days"], 30)
+
+    def test_update_settings_accepts_disabled_history_cleanup(self) -> None:
+        settings = self.client.get("/api/v1/settings/", headers=self.auth_headers).json()
+        settings["API_TOKEN"]["token"] = {}
+        settings["GOTIFY"]["token"] = {}
+        settings["TASKS"]["history_retention_days"] = None
+
+        response = self.client.put(
+            "/api/v1/settings/",
+            headers=self.auth_headers,
+            json=settings,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(response.json()["settings"]["TASKS"]["history_retention_days"])
+        self.assertIsNone(self.app.state.config.tasks.history_retention_days)
+        saved = json.loads(self.config_path.read_text(encoding="utf-8"))
+        self.assertIsNone(saved["TASKS"]["history_retention_days"])
+
+    def test_raw_cookie_task_api_returns_incremental_results_without_secrets(self) -> None:
+        response = self.client.post(
+            "/api/v1/tasks",
+            headers=self.auth_headers,
+            json={
+                "type": "raw_cookie_validation",
+                "items": [
+                    {"line_number": 2, "cookie": "SESSDATA=valid; DedeUserID=4101"},
+                    {"line_number": 5, "cookie": "SESSDATA=invalid; DedeUserID=4102"},
+                ],
+            },
+        )
+        self.assertEqual(response.status_code, 202)
+        task = self._wait_task(response.json()["id"])
+        self.assertEqual(task["succeeded"], 1)
+        self.assertEqual(task["invalid"], 1)
+
+        items_response = self.client.get(
+            f"/api/v1/tasks/{task['id']}/items",
+            headers=self.auth_headers,
+        )
+        self.assertEqual(items_response.status_code, 200)
+        items = items_response.json()["items"]
+        self.assertEqual([item["line_number"] for item in items], [2, 5])
+        self.assertTrue(all("secret_payload" not in item for item in items))
+
+        updates_response = self.client.get(
+            f"/api/v1/tasks/{task['id']}/updates?after=0",
+            headers=self.auth_headers,
+        )
+        self.assertEqual(updates_response.status_code, 200)
+        self.assertEqual(len(updates_response.json()["items"]), 2)
+
+    def test_task_cancel_retry_and_delete_endpoints(self) -> None:
+        original_inspect = self.app.state.cookie_service.client.inspect_cookie
+
+        async def slow_inspect(header_string: str):
+            await asyncio.sleep(0.05)
+            return await original_inspect(header_string)
+
+        self.app.state.cookie_service.client.inspect_cookie = slow_inspect
+        create_response = self.client.post(
+            "/api/v1/tasks",
+            headers=self.auth_headers,
+            json={
+                "type": "raw_cookie_validation",
+                "items": [
+                    {"line_number": index + 1, "cookie": f"SESSDATA=valid; DedeUserID={5000 + index}"}
+                    for index in range(40)
+                ],
+            },
+        )
+        self.assertEqual(create_response.status_code, 202)
+        task_id = create_response.json()["id"]
+
+        delete_active = self.client.delete(f"/api/v1/tasks/{task_id}", headers=self.auth_headers)
+        self.assertEqual(delete_active.status_code, 409)
+        cancel_response = self.client.post(
+            f"/api/v1/tasks/{task_id}/cancel",
+            headers=self.auth_headers,
+        )
+        self.assertEqual(cancel_response.status_code, 200)
+        cancelled = self._wait_task(task_id)
+        self.assertEqual(cancelled["status"], "cancelled")
+        delete_response = self.client.delete(f"/api/v1/tasks/{task_id}", headers=self.auth_headers)
+        self.assertEqual(delete_response.status_code, 200)
+        self.app.state.cookie_service.client.inspect_cookie = original_inspect
+
+        failed_response = self.client.post(
+            "/api/v1/tasks",
+            headers=self.auth_headers,
+            json={"type": "cookie_check", "ids": ["missing-account"]},
+        )
+        failed_task = self._wait_task(failed_response.json()["id"])
+        self.assertEqual(failed_task["failed"], 1)
+
+        retry_response = self.client.post(
+            f"/api/v1/tasks/{failed_task['id']}/retry",
+            headers=self.auth_headers,
+        )
+        self.assertEqual(retry_response.status_code, 202)
+        self.assertEqual(retry_response.json()["parent_task_id"], failed_task["id"])
+        self._wait_task(retry_response.json()["id"])
+        duplicate_retry = self.client.post(
+            f"/api/v1/tasks/{failed_task['id']}/retry",
+            headers=self.auth_headers,
+        )
+        self.assertEqual(duplicate_retry.status_code, 400)
 
     def test_update_settings_preserves_overwrites_and_clears_tokens(self) -> None:
         settings = self.client.get("/api/v1/settings/", headers=self.auth_headers).json()
@@ -683,19 +816,18 @@ class ApiTagTests(unittest.TestCase):
         self.assertEqual(self.app.state.config.port, 18081)
 
     def test_update_settings_restarts_scheduler_when_scheduler_changes(self) -> None:
-        with self.client:
-            old_scheduler = self.app.state.scheduler
-            settings = self.client.get("/api/v1/settings/", headers=self.auth_headers).json()
-            settings["API_TOKEN"]["token"] = {}
-            settings["GOTIFY"]["token"] = {}
-            settings["SCHEDULER"]["COOKIE_CHECK"]["enable"] = True
-            settings["SCHEDULER"]["COOKIE_CHECK"]["interval_seconds"] = 60
+        old_scheduler = self.app.state.scheduler
+        settings = self.client.get("/api/v1/settings/", headers=self.auth_headers).json()
+        settings["API_TOKEN"]["token"] = {}
+        settings["GOTIFY"]["token"] = {}
+        settings["SCHEDULER"]["COOKIE_CHECK"]["enable"] = True
+        settings["SCHEDULER"]["COOKIE_CHECK"]["interval_seconds"] = 60
 
-            response = self.client.put("/api/v1/settings/", headers=self.auth_headers, json=settings)
+        response = self.client.put("/api/v1/settings/", headers=self.auth_headers, json=settings)
 
-            self.assertEqual(response.status_code, 200)
-            self.assertIsNot(self.app.state.scheduler, old_scheduler)
-            self.assertTrue(self.app.state.config.scheduler.cookie_check.enable)
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNot(self.app.state.scheduler, old_scheduler)
+        self.assertTrue(self.app.state.config.scheduler.cookie_check.enable)
 
 
 class TicketAndRiskServiceTests(unittest.IsolatedAsyncioTestCase):
@@ -709,7 +841,7 @@ class TicketAndRiskServiceTests(unittest.IsolatedAsyncioTestCase):
         self.client = FakeBilibiliClient()
         self.service = CookieService(self.repo, config, bilibili_client=self.client)
         await self.repo.save_from_raw(build_raw("9001"))
-        await self.repo.update_check_status("9001", valid=True, username="用户9001")
+        await self.repo.update_check_result("9001", status="valid", username="用户9001")
 
     async def asyncTearDown(self) -> None:
         self.temp_dir.cleanup()
@@ -753,21 +885,42 @@ class TicketAndRiskServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("b_nut=", listed[0]["managed"]["header_string"])
         self.assertNotIn("bili_ticket=", listed[0]["managed"]["header_string"])
 
-    async def test_check_cookies_counts_invalid_as_failed(self) -> None:
-        async def fake_invalid(_hs: str) -> bool:
-            return False
-        self.client.check_cookie_valid = fake_invalid
-        summary = await self.service.check_cookies(ids=["9001"])
-        self.assertEqual(summary["succeeded"], 0)
-        self.assertEqual(summary["failed"], 1)
+    async def test_check_cookie_returns_invalid_outcome(self) -> None:
+        async def fake_invalid(_hs: str):
+            return {
+                "status": "invalid",
+                "is_valid": False,
+                "code": 200,
+                "message": "Cookie 无效",
+                "username": None,
+            }
+        self.client.inspect_cookie = fake_invalid
+        result = await self.service.check_cookie("9001")
+        self.assertEqual(result.status, "invalid")
+        self.assertEqual(result.document["managed"]["status"], "invalid")
 
-    async def test_refresh_cookies_counts_failed_status(self) -> None:
+    async def test_check_cookie_network_failure_preserves_previous_status(self) -> None:
+        async def fake_failed(_hs: str):
+            return {
+                "status": "failed",
+                "is_valid": False,
+                "code": 502,
+                "message": "网络错误",
+                "username": None,
+            }
+        self.client.inspect_cookie = fake_failed
+        result = await self.service.check_cookie("9001")
+        stored = await self.repo.get("9001")
+        self.assertEqual(result.status, "failed")
+        self.assertEqual(stored["managed"]["status"], "valid")
+        self.assertEqual(stored["managed"]["error_message"], "网络错误")
+
+    async def test_refresh_cookie_records_failed_status(self) -> None:
         async def fake_failed_refresh(_ak: str, _rt: str):
             return {"code": -1, "message": "mock 刷新失败"}
         self.client.refresh_cookie = fake_failed_refresh
-        summary = await self.service.refresh_cookies(ids=["9001"])
-        self.assertEqual(summary["succeeded"], 0)
-        self.assertEqual(summary["failed"], 1)
+        result = await self.service.refresh_cookie("9001")
+        self.assertEqual(result["managed"]["refresh_status"], "failed")
 
     async def test_refresh_cookie_returns_final_checked_document(self) -> None:
         self.service.client = InvalidAfterRefreshClient()
@@ -787,12 +940,10 @@ class TicketAndRiskServiceTests(unittest.IsolatedAsyncioTestCase):
         doc["managed"]["last_refresh_time"] = None
         (self.cookie_dir / "9001.json").write_text(json.dumps(doc, ensure_ascii=False), encoding="utf-8")
 
-        summary = await self.service.refresh_expiring_cookies(30 * 86400)
+        summary = await self.service.refresh_cookie_if_expiring("9001", 30 * 86400)
         stored = await self.repo.get("9001")
 
-        self.assertEqual(summary["total"], 1)
-        self.assertEqual(summary["refreshed"], 0)
-        self.assertEqual(summary["skipped"], 1)
+        self.assertEqual(summary["status"], "skipped")
         self.assertEqual(stored["managed"]["last_refresh_time"], None)
         self.assertEqual(stored["managed"]["refresh_status"], "not_needed")
 
@@ -802,12 +953,10 @@ class TicketAndRiskServiceTests(unittest.IsolatedAsyncioTestCase):
         doc["raw"] = raw
         (self.cookie_dir / "9001.json").write_text(json.dumps(doc, ensure_ascii=False), encoding="utf-8")
 
-        summary = await self.service.refresh_expiring_cookies(30 * 86400)
+        summary = await self.service.refresh_cookie_if_expiring("9001", 30 * 86400)
         stored = await self.repo.get("9001")
 
-        self.assertEqual(summary["total"], 1)
-        self.assertEqual(summary["refreshed"], 1)
-        self.assertEqual(summary["skipped"], 0)
+        self.assertEqual(summary["status"], "succeeded")
         self.assertEqual(stored["managed"]["refresh_status"], "success")
         self.assertIn("refreshed-sess-9001", stored["managed"]["header_string"])
 
@@ -817,13 +966,11 @@ class TicketAndRiskServiceTests(unittest.IsolatedAsyncioTestCase):
         doc["raw"] = raw
         (self.cookie_dir / "9001.json").write_text(json.dumps(doc, ensure_ascii=False), encoding="utf-8")
 
-        summary = await self.service.refresh_expiring_cookies(30 * 86400)
+        summary = await self.service.refresh_cookie_if_expiring("9001", 30 * 86400)
         stored = await self.repo.get("9001")
 
-        self.assertEqual(summary["total"], 1)
-        self.assertEqual(summary["refreshed"], 0)
-        self.assertEqual(summary["skipped"], 1)
-        self.assertIn("SESSDATA.expires", summary["details"][0]["message"])
+        self.assertEqual(summary["status"], "skipped")
+        self.assertIn("SESSDATA.expires", summary["message"])
         self.assertEqual(stored["managed"]["refresh_status"], "not_needed")
 
     async def test_refresh_expiring_cookies_skips_missing_sessdata_expires(self) -> None:
@@ -836,13 +983,11 @@ class TicketAndRiskServiceTests(unittest.IsolatedAsyncioTestCase):
         doc["raw"] = raw
         (self.cookie_dir / "9001.json").write_text(json.dumps(doc, ensure_ascii=False), encoding="utf-8")
 
-        summary = await self.service.refresh_expiring_cookies(30 * 86400)
+        summary = await self.service.refresh_cookie_if_expiring("9001", 30 * 86400)
         stored = await self.repo.get("9001")
 
-        self.assertEqual(summary["total"], 1)
-        self.assertEqual(summary["refreshed"], 0)
-        self.assertEqual(summary["skipped"], 1)
-        self.assertIn("SESSDATA.expires", summary["details"][0]["message"])
+        self.assertEqual(summary["status"], "skipped")
+        self.assertIn("SESSDATA.expires", summary["message"])
         self.assertEqual(stored["managed"]["refresh_status"], "not_needed")
 
     async def test_get_sessdata_expires_rejects_bool(self) -> None:
@@ -863,7 +1008,7 @@ class TicketAndRiskServiceTests(unittest.IsolatedAsyncioTestCase):
         stored = await self.repo.get("9001")
 
         self.assertIsNotNone(checked)
-        self.assertNotIn("b_nut=", checked["managed"]["header_string"])
+        self.assertNotIn("b_nut=", checked.document["managed"]["header_string"])
         self.assertNotIn("b_nut=", stored["managed"]["header_string"])
 
     async def test_risk_control_exception_records_error_and_preserves_state(self) -> None:
@@ -871,11 +1016,10 @@ class TicketAndRiskServiceTests(unittest.IsolatedAsyncioTestCase):
         self.service.config.bili.risk_control_enabled = True
         self.service.client = RaisingRiskClient()
 
-        summary = await self.service.check_risk_control_for_all()
+        summary = await self.service.check_risk_control("9001")
         stored = await self.repo.get("9001")
 
-        self.assertEqual(summary["checked"], 0)
-        self.assertEqual(summary["failed"], 1)
+        self.assertEqual(summary["status"], "failed")
         self.assertTrue(stored["managed"]["risk_controlled"])
         self.assertEqual(stored["managed"]["risk_control_voucher"], "old-voucher")
         self.assertEqual(stored["managed"]["risk_control_error_message"], "risk boom")
@@ -919,6 +1063,33 @@ class BilibiliClientContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result["risk_controlled"])
         self.assertEqual(result["status"], 500)
         self.assertIn("HTTP 500", result["error_message"])
+
+    async def test_inspect_cookie_returns_valid_user_in_one_request(self) -> None:
+        self.client._client = FakeHttpClient(httpx.Response(
+            200,
+            json={"code": 0, "message": "0", "data": {"isLogin": True, "uname": "测试用户"}},
+            request=httpx.Request("GET", "https://example.test"),
+        ))
+
+        result = await self.client.inspect_cookie("SESSDATA=test")
+        self.assertEqual(result["status"], "valid")
+        self.assertEqual(result["username"], "测试用户")
+
+    async def test_inspect_cookie_distinguishes_invalid_and_http_failure(self) -> None:
+        self.client._client = FakeHttpClient(httpx.Response(
+            200,
+            json={"code": -101, "message": "账号未登录", "data": {}},
+            request=httpx.Request("GET", "https://example.test"),
+        ))
+        invalid = await self.client.inspect_cookie("SESSDATA=invalid")
+        self.assertEqual(invalid["status"], "invalid")
+
+        self.client._client = FakeHttpClient(httpx.Response(
+            503,
+            request=httpx.Request("GET", "https://example.test"),
+        ))
+        failed = await self.client.inspect_cookie("SESSDATA=test")
+        self.assertEqual(failed["status"], "failed")
 
     async def test_risk_control_minus_352_without_voucher_is_controlled(self) -> None:
         self.client._get_wbi_keys = fake_wbi_keys
@@ -1126,13 +1297,13 @@ class ConfigSchedulerTests(unittest.TestCase):
         from core.scheduler import AppScheduler
 
         class TicketServiceStub:
-            async def refresh_expiring_tickets(self):
-                return {"ok": True, "total": 0, "refreshed": 0, "skipped": 0, "failed": 0, "details": []}
+            async def create_scheduled_ticket_refresh(self):
+                return None
 
         config = AppConfig(
             bili=BiliConfig(bili_ticket_enabled=False, risk_control_enabled=False),
         )
-        scheduler = AppScheduler(service=TicketServiceStub(), config=config)
+        scheduler = AppScheduler(task_service=TicketServiceStub(), config=config)
 
         async def run() -> None:
             app = type("AppStub", (), {"state": type("StateStub", (), {})()})()
@@ -1147,8 +1318,8 @@ class ConfigSchedulerTests(unittest.TestCase):
         from core.scheduler import AppScheduler
 
         class TicketServiceStub:
-            async def refresh_expiring_tickets(self):
-                return {"ok": True, "total": 0, "refreshed": 0, "skipped": 0, "failed": 0, "details": []}
+            async def create_scheduled_ticket_refresh(self):
+                return None
 
         config = build_config({
             "SCHEDULER": {
@@ -1161,7 +1332,7 @@ class ConfigSchedulerTests(unittest.TestCase):
                 "bili_ticket_enabled": True,
             },
         })
-        scheduler = AppScheduler(service=TicketServiceStub(), config=config)
+        scheduler = AppScheduler(task_service=TicketServiceStub(), config=config)
 
         async def run() -> None:
             app = type("AppStub", (), {"state": type("StateStub", (), {})()})()
@@ -1178,13 +1349,13 @@ class ConfigSchedulerTests(unittest.TestCase):
         from core.scheduler import AppScheduler
 
         class RiskServiceStub:
-            async def check_risk_control_for_all(self):
-                return {"ok": True, "total": 0, "checked": 0, "failed": 0, "details": []}
+            async def create_scheduled_risk_check(self):
+                return None
 
         config = AppConfig(
             bili=BiliConfig(bili_ticket_enabled=False, risk_control_enabled=False),
         )
-        scheduler = AppScheduler(service=RiskServiceStub(), config=config)
+        scheduler = AppScheduler(task_service=RiskServiceStub(), config=config)
 
         async def run() -> None:
             app = type("AppStub", (), {"state": type("StateStub", (), {})()})()
@@ -1199,8 +1370,8 @@ class ConfigSchedulerTests(unittest.TestCase):
         from core.scheduler import AppScheduler
 
         class RiskServiceStub:
-            async def check_risk_control_for_all(self):
-                return {"ok": True, "total": 0, "checked": 0, "failed": 0, "details": []}
+            async def create_scheduled_risk_check(self):
+                return None
 
         config = AppConfig(
             bili=BiliConfig(bili_ticket_enabled=False, risk_control_enabled=True),
@@ -1208,7 +1379,7 @@ class ConfigSchedulerTests(unittest.TestCase):
                 risk_control_check=SchedulerIntervalConfig(interval_seconds=60),
             ),
         )
-        scheduler = AppScheduler(service=RiskServiceStub(), config=config)
+        scheduler = AppScheduler(task_service=RiskServiceStub(), config=config)
 
         async def run() -> None:
             app = type("AppStub", (), {"state": type("StateStub", (), {})()})()
